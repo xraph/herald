@@ -1,0 +1,702 @@
+---
+title: HTTP API
+description: Complete HTTP API reference for Herald notification endpoints.
+---
+
+Herald exposes a RESTful HTTP API through the Forge framework. When using the Forge extension, all routes are mounted under a configurable base path (default: `/herald`). The API supports providers, templates, template versions, sending notifications, delivery log, user inbox, preferences, and scoped configuration.
+
+All endpoints accept and return JSON. TypeID strings are used as entity identifiers (e.g., `hpvd_01h...` for providers).
+
+## Send
+
+### Send Notification
+
+Sends a notification on a single channel.
+
+```
+POST /herald/send
+```
+
+**Request body:**
+
+```json
+{
+  "app_id": "myapp",
+  "channel": "email",
+  "template": "welcome",
+  "locale": "en",
+  "to": ["alice@example.com"],
+  "data": {
+    "name": "Alice",
+    "app_name": "My App"
+  },
+  "org_id": "org-acme",
+  "user_id": "user-alice",
+  "metadata": {
+    "source": "signup"
+  },
+  "async": false
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `app_id` | string | Yes | Application identifier |
+| `channel` | string | Yes | Channel type: `email`, `sms`, `push`, `inapp` |
+| `to` | string[] | Yes | Recipient addresses |
+| `template` | string | No | Template slug (omit to use `subject`/`body` directly) |
+| `locale` | string | No | Locale code for template version (defaults to config) |
+| `data` | object | No | Template variable data |
+| `subject` | string | No | Direct subject (when not using a template) |
+| `body` | string | No | Direct body (when not using a template) |
+| `org_id` | string | No | Organization ID for scope resolution |
+| `user_id` | string | No | User ID for preference checking and scope resolution |
+| `env_id` | string | No | Environment ID |
+| `metadata` | object | No | User-defined key-value metadata |
+| `async` | boolean | No | Whether to send asynchronously |
+
+**Response (200):**
+
+```json
+{
+  "message_id": "hmsg_01h9xz...",
+  "status": "sent",
+  "provider_id": "hpvd_01h9xz...",
+  "error": ""
+}
+```
+
+### Multi-Channel Notify
+
+Sends a notification across multiple channels using a template.
+
+```
+POST /herald/notify
+```
+
+**Request body:**
+
+```json
+{
+  "app_id": "myapp",
+  "template": "order-confirmation",
+  "channels": ["email", "inapp"],
+  "to": ["alice@example.com"],
+  "user_id": "user-alice",
+  "data": {
+    "name": "Alice",
+    "order_id": "ORD-12345"
+  }
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `app_id` | string | Yes | Application identifier |
+| `template` | string | Yes | Template slug |
+| `channels` | string[] | Yes | Channel types to send on |
+| `to` | string[] | Yes | Recipient addresses |
+| `user_id` | string | No | User ID for preferences and scope |
+| `locale` | string | No | Locale code |
+| `data` | object | No | Template variable data |
+| `org_id` | string | No | Organization ID |
+| `env_id` | string | No | Environment ID |
+| `metadata` | object | No | User-defined metadata |
+| `async` | boolean | No | Whether to send asynchronously |
+
+**Response (200):**
+
+```json
+[
+  {
+    "message_id": "hmsg_01h9xz...",
+    "status": "sent",
+    "provider_id": "hpvd_01h9xz..."
+  },
+  {
+    "message_id": "hmsg_01h9y0...",
+    "status": "sent",
+    "provider_id": "hpvd_01h9y0..."
+  }
+]
+```
+
+## Providers
+
+### Create Provider
+
+```
+POST /herald/providers
+```
+
+**Request body:**
+
+```json
+{
+  "app_id": "myapp",
+  "name": "SMTP Production",
+  "channel": "email",
+  "driver": "smtp",
+  "credentials": {
+    "host": "smtp.example.com",
+    "port": "587",
+    "username": "noreply@example.com",
+    "password": "secret"
+  },
+  "settings": {
+    "from": "noreply@example.com",
+    "from_name": "My App"
+  },
+  "priority": 0,
+  "enabled": true
+}
+```
+
+**Response (201):**
+
+```json
+{
+  "id": "hpvd_01h9xz...",
+  "app_id": "myapp",
+  "name": "SMTP Production",
+  "channel": "email",
+  "driver": "smtp",
+  "credentials": {"host": "smtp.example.com", "port": "587", "username": "noreply@example.com", "password": "secret"},
+  "settings": {"from": "noreply@example.com", "from_name": "My App"},
+  "priority": 0,
+  "enabled": true,
+  "created_at": "2024-01-15T10:30:00Z",
+  "updated_at": "2024-01-15T10:30:00Z"
+}
+```
+
+### List Providers
+
+```
+GET /herald/providers?app_id=myapp&channel=email
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `app_id` | query | Yes | Filter by application |
+| `channel` | query | No | Filter by channel type |
+
+**Response (200):** Array of provider objects.
+
+### Get Provider
+
+```
+GET /herald/providers/:id
+```
+
+**Response (200):** Single provider object.
+
+### Update Provider
+
+```
+PUT /herald/providers/:id
+```
+
+**Request body** (all fields optional):
+
+```json
+{
+  "name": "Updated Name",
+  "credentials": {"host": "new-smtp.example.com"},
+  "enabled": false
+}
+```
+
+**Response (200):** Updated provider object.
+
+### Delete Provider
+
+```
+DELETE /herald/providers/:id
+```
+
+**Response:** 204 No Content.
+
+## Templates
+
+### Create Template
+
+```
+POST /herald/templates
+```
+
+**Request body:**
+
+```json
+{
+  "app_id": "myapp",
+  "slug": "welcome",
+  "name": "Welcome Email",
+  "channel": "email",
+  "category": "transactional",
+  "variables": [
+    {"name": "name", "type": "string", "required": true},
+    {"name": "app_name", "type": "string", "required": false, "default": "My App"}
+  ],
+  "enabled": true
+}
+```
+
+**Response (201):** Template object with generated `id` (`htpl_...`).
+
+### List Templates
+
+```
+GET /herald/templates?app_id=myapp&channel=email
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `app_id` | query | Yes | Filter by application |
+| `channel` | query | No | Filter by channel type |
+
+**Response (200):** Array of template objects.
+
+### Get Template
+
+```
+GET /herald/templates/:id
+```
+
+**Response (200):** Template object with `versions` array populated.
+
+### Update Template
+
+```
+PUT /herald/templates/:id
+```
+
+**Request body** (all fields optional):
+
+```json
+{
+  "name": "Updated Welcome Email",
+  "category": "auth",
+  "enabled": false
+}
+```
+
+**Response (200):** Updated template object.
+
+### Delete Template
+
+```
+DELETE /herald/templates/:id
+```
+
+Deletes the template and all its associated versions.
+
+**Response:** 204 No Content.
+
+## Template Versions
+
+### Create Version
+
+```
+POST /herald/templates/:id/versions
+```
+
+**Request body:**
+
+```json
+{
+  "locale": "en",
+  "subject": "Welcome to {{.app_name}}, {{.name}}!",
+  "html": "<h1>Hello {{.name}}</h1><p>Welcome aboard!</p>",
+  "text": "Hello {{.name}}, Welcome aboard!",
+  "title": "Welcome"
+}
+```
+
+**Response (201):** Version object with generated `id` (`htpv_...`).
+
+### List Versions
+
+```
+GET /herald/templates/:id/versions
+```
+
+**Response (200):** Array of version objects for the specified template.
+
+### Update Version
+
+```
+PUT /herald/templates/:id/versions/:versionId
+```
+
+**Request body** (all fields optional):
+
+```json
+{
+  "subject": "Updated subject line",
+  "html": "<h1>Updated HTML</h1>",
+  "active": false
+}
+```
+
+**Response (200):** Updated version object.
+
+### Delete Version
+
+```
+DELETE /herald/templates/:id/versions/:versionId
+```
+
+**Response:** 204 No Content.
+
+## Messages
+
+### List Messages
+
+```
+GET /herald/messages?app_id=myapp&status=sent&channel=email&offset=0&limit=50
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `app_id` | query | Yes | Filter by application |
+| `channel` | query | No | Filter by channel |
+| `status` | query | No | Filter by status: `queued`, `sending`, `sent`, `failed`, `bounced`, `delivered` |
+| `offset` | query | No | Pagination offset (default: 0) |
+| `limit` | query | No | Page size (default: 50) |
+
+**Response (200):** Array of message objects.
+
+```json
+[
+  {
+    "id": "hmsg_01h9xz...",
+    "app_id": "myapp",
+    "template_id": "welcome",
+    "provider_id": "hpvd_01h9xz...",
+    "channel": "email",
+    "recipient": "alice@example.com",
+    "subject": "Welcome to My App, Alice!",
+    "body": "Hello Alice, Welcome aboard!",
+    "status": "sent",
+    "error": "",
+    "metadata": {"source": "signup"},
+    "attempts": 1,
+    "sent_at": "2024-01-15T10:30:01Z",
+    "created_at": "2024-01-15T10:30:00Z"
+  }
+]
+```
+
+### Get Message
+
+```
+GET /herald/messages/:id
+```
+
+**Response (200):** Single message object.
+
+## Inbox
+
+### List Notifications
+
+```
+GET /herald/inbox?app_id=myapp&user_id=user-alice&offset=0&limit=50
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `app_id` | query | Yes | Application ID |
+| `user_id` | query | Yes | User ID |
+| `offset` | query | No | Pagination offset (default: 0) |
+| `limit` | query | No | Page size (default: 50) |
+
+**Response (200):** Array of notification objects.
+
+```json
+[
+  {
+    "id": "hinb_01h9xz...",
+    "app_id": "myapp",
+    "user_id": "user-alice",
+    "type": "welcome",
+    "title": "Welcome aboard!",
+    "body": "Thanks for signing up.",
+    "action_url": "/getting-started",
+    "read": false,
+    "created_at": "2024-01-15T10:30:00Z"
+  }
+]
+```
+
+### Unread Count
+
+```
+GET /herald/inbox/unread/count?app_id=myapp&user_id=user-alice
+```
+
+**Response (200):**
+
+```json
+{
+  "count": 3
+}
+```
+
+### Mark Read
+
+```
+PUT /herald/inbox/:id/read
+```
+
+Marks a single notification as read.
+
+**Response:** 204 No Content.
+
+### Mark All Read
+
+```
+PUT /herald/inbox/read-all?app_id=myapp&user_id=user-alice
+```
+
+Marks all unread notifications for the user as read.
+
+**Response:** 204 No Content.
+
+### Delete Notification
+
+```
+DELETE /herald/inbox/:id
+```
+
+**Response:** 204 No Content.
+
+## Preferences
+
+### Get Preferences
+
+```
+GET /herald/preferences?app_id=myapp&user_id=user-alice
+```
+
+**Response (200):**
+
+```json
+{
+  "id": "hprf_01h9xz...",
+  "app_id": "myapp",
+  "user_id": "user-alice",
+  "overrides": {
+    "marketing-weekly": {
+      "email": false,
+      "push": true
+    },
+    "product-updates": {
+      "email": true,
+      "push": true,
+      "sms": false
+    }
+  },
+  "created_at": "2024-01-15T10:30:00Z",
+  "updated_at": "2024-01-15T10:30:00Z"
+}
+```
+
+### Update Preferences
+
+```
+PUT /herald/preferences
+```
+
+**Request body:**
+
+```json
+{
+  "app_id": "myapp",
+  "user_id": "user-alice",
+  "overrides": {
+    "marketing-weekly": {
+      "email": false,
+      "push": true
+    }
+  }
+}
+```
+
+The `overrides` map keys are template slugs. Each value is a `ChannelPreference` object with optional boolean fields for `email`, `sms`, `push`, and `inapp`. A `false` value means the user opts out of that channel for that template.
+
+**Response (200):** Updated preference object.
+
+## Scoped Configuration
+
+### List Configs
+
+```
+GET /herald/config?app_id=myapp
+```
+
+Returns all scoped configurations (app, org, user) for an application.
+
+**Response (200):**
+
+```json
+[
+  {
+    "id": "hscf_01h9xz...",
+    "app_id": "myapp",
+    "scope": "app",
+    "scope_id": "myapp",
+    "email_provider_id": "hpvd_01h9xz...",
+    "from_email": "noreply@myapp.com",
+    "from_name": "My App",
+    "default_locale": "en",
+    "created_at": "2024-01-15T10:30:00Z",
+    "updated_at": "2024-01-15T10:30:00Z"
+  },
+  {
+    "id": "hscf_01h9y0...",
+    "app_id": "myapp",
+    "scope": "org",
+    "scope_id": "org-acme",
+    "email_provider_id": "hpvd_01h9y0...",
+    "from_email": "noreply@acme.com",
+    "from_name": "Acme Corp"
+  }
+]
+```
+
+### Set App Config
+
+```
+PUT /herald/config/app
+```
+
+**Request body:**
+
+```json
+{
+  "app_id": "myapp",
+  "email_provider_id": "hpvd_01h9xz...",
+  "sms_provider_id": "hpvd_01h9y0...",
+  "push_provider_id": "",
+  "from_email": "noreply@myapp.com",
+  "from_name": "My App",
+  "from_phone": "+15551234567",
+  "default_locale": "en"
+}
+```
+
+**Response (200):** Scoped config object.
+
+### Set Org Config
+
+```
+PUT /herald/config/org/:orgId
+```
+
+**Request body:**
+
+```json
+{
+  "app_id": "myapp",
+  "email_provider_id": "hpvd_01h9y0...",
+  "from_email": "noreply@acme.com",
+  "from_name": "Acme Corp"
+}
+```
+
+All provider ID and sender fields are optional -- only set fields are applied.
+
+**Response (200):** Scoped config object.
+
+### Set User Config
+
+```
+PUT /herald/config/user/:userId
+```
+
+**Request body:**
+
+```json
+{
+  "app_id": "myapp",
+  "from_name": "Personal Sender",
+  "default_locale": "fr"
+}
+```
+
+**Response (200):** Scoped config object.
+
+### Delete Org Config
+
+```
+DELETE /herald/config/org/:orgId?app_id=myapp
+```
+
+**Response:** 204 No Content.
+
+### Delete User Config
+
+```
+DELETE /herald/config/user/:userId?app_id=myapp
+```
+
+**Response:** 204 No Content.
+
+## Error Responses
+
+All error responses follow the Forge framework's standard error format:
+
+```json
+{
+  "error": {
+    "code": 400,
+    "message": "invalid provider ID"
+  }
+}
+```
+
+### Common Error Codes
+
+| Status | Meaning |
+|--------|---------|
+| 400 | Bad request -- invalid ID format or missing required fields |
+| 404 | Entity not found |
+| 409 | Conflict -- duplicate slug/channel/locale combination |
+| 500 | Internal server error |
+
+## Route Summary
+
+| Method | Path | Operation |
+|--------|------|-----------|
+| `POST` | `/herald/send` | Send single notification |
+| `POST` | `/herald/notify` | Multi-channel notify |
+| `POST` | `/herald/providers` | Create provider |
+| `GET` | `/herald/providers` | List providers |
+| `GET` | `/herald/providers/:id` | Get provider |
+| `PUT` | `/herald/providers/:id` | Update provider |
+| `DELETE` | `/herald/providers/:id` | Delete provider |
+| `POST` | `/herald/templates` | Create template |
+| `GET` | `/herald/templates` | List templates |
+| `GET` | `/herald/templates/:id` | Get template |
+| `PUT` | `/herald/templates/:id` | Update template |
+| `DELETE` | `/herald/templates/:id` | Delete template |
+| `POST` | `/herald/templates/:id/versions` | Create version |
+| `GET` | `/herald/templates/:id/versions` | List versions |
+| `PUT` | `/herald/templates/:id/versions/:versionId` | Update version |
+| `DELETE` | `/herald/templates/:id/versions/:versionId` | Delete version |
+| `GET` | `/herald/messages` | List messages |
+| `GET` | `/herald/messages/:id` | Get message |
+| `GET` | `/herald/inbox` | List inbox |
+| `GET` | `/herald/inbox/unread/count` | Unread count |
+| `PUT` | `/herald/inbox/:id/read` | Mark read |
+| `PUT` | `/herald/inbox/read-all` | Mark all read |
+| `DELETE` | `/herald/inbox/:id` | Delete notification |
+| `GET` | `/herald/preferences` | Get preferences |
+| `PUT` | `/herald/preferences` | Update preferences |
+| `GET` | `/herald/config` | List configs |
+| `PUT` | `/herald/config/app` | Set app config |
+| `PUT` | `/herald/config/org/:orgId` | Set org config |
+| `PUT` | `/herald/config/user/:userId` | Set user config |
+| `DELETE` | `/herald/config/org/:orgId` | Delete org config |
+| `DELETE` | `/herald/config/user/:userId` | Delete user config |

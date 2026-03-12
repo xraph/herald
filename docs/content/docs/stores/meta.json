@@ -1,0 +1,4 @@
+{
+  "title": "Stores",
+  "pages": ["grove", "postgres", "sqlite", "mongo", "memory"]
+}

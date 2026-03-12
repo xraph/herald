@@ -1,0 +1,324 @@
+---
+title: Drivers
+description: Built-in notification drivers for SMTP, Resend, Twilio, FCM, and InApp delivery with the Driver interface.
+---
+
+Drivers are the low-level transport layer in Herald. Each driver knows how to deliver a message through a specific external service. Herald ships with five built-in drivers covering all four channels, and the `Driver` interface allows you to add custom drivers.
+
+## Driver Interface
+
+Every driver implements the `driver.Driver` interface:
+
+```go
+type Driver interface {
+    // Name returns the driver identifier (e.g., "smtp", "twilio", "fcm").
+    Name() string
+
+    // Channel returns which notification channel this driver handles.
+    Channel() string
+
+    // Send delivers a message and returns a delivery result.
+    Send(ctx context.Context, msg *OutboundMessage) (*DeliveryResult, error)
+
+    // Validate checks if the provided credentials and settings are valid.
+    Validate(credentials, settings map[string]string) error
+}
+```
+
+## OutboundMessage
+
+The `OutboundMessage` is the normalized message format passed from Herald to every driver:
+
+```go
+type OutboundMessage struct {
+    To       string            `json:"to"`
+    From     string            `json:"from,omitempty"`
+    FromName string            `json:"from_name,omitempty"`
+    Subject  string            `json:"subject,omitempty"`
+    HTML     string            `json:"html,omitempty"`
+    Text     string            `json:"text,omitempty"`
+    Title    string            `json:"title,omitempty"`
+    Data     map[string]string `json:"data,omitempty"`
+}
+```
+
+The `Data` map contains the provider's credentials and settings, injected by Herald during delivery. Drivers read their configuration values from this map.
+
+## DeliveryResult
+
+Drivers return a `DeliveryResult` on success:
+
+```go
+type DeliveryResult struct {
+    ProviderMessageID string         `json:"provider_message_id,omitempty"`
+    Status            message.Status `json:"status"`
+}
+```
+
+The `ProviderMessageID` is the external identifier assigned by the service (e.g., Resend email ID, Twilio SID, FCM message name).
+
+## Driver Registry
+
+Drivers are registered in a thread-safe `Registry` and looked up by name at send time:
+
+```go
+registry := driver.NewRegistry()
+registry.Register(&email.SMTPDriver{})
+registry.Register(&email.ResendDriver{})
+registry.Register(&sms.TwilioDriver{})
+registry.Register(&push.FCMDriver{})
+registry.Register(&inapp.Driver{})
+
+// Lookup at send time
+drv, err := registry.Get("smtp")
+```
+
+The registry also supports listing drivers by channel:
+
+```go
+emailDrivers := registry.ListByChannel("email")
+// Returns: [SMTPDriver, ResendDriver]
+```
+
+When using Herald through the Forge extension, all built-in drivers are registered automatically.
+
+## Built-in Drivers
+
+### SMTP
+
+The SMTP driver delivers email via standard SMTP protocol with optional TLS.
+
+| Credential | Required | Description |
+|-----------|----------|-------------|
+| `host` | Yes | SMTP server hostname |
+| `port` | Yes | SMTP server port (usually 25, 465, or 587) |
+| `username` | No | SMTP authentication username |
+| `password` | No | SMTP authentication password |
+| `use_tls` | No | Set to `"true"` for direct TLS connection |
+
+```go
+driver := &email.SMTPDriver{}
+driver.Name()    // "smtp"
+driver.Channel() // "email"
+```
+
+**How it works**: The driver constructs an RFC 2822 message with `From`, `To`, `Subject`, and `Content-Type` headers. If `username` is provided, it authenticates using `smtp.PlainAuth`. When `use_tls` is `"true"`, the driver opens a direct TLS connection (implicit TLS on port 465); otherwise, it uses `smtp.SendMail` which supports STARTTLS.
+
+HTML content takes priority over plain text when both are present in the outbound message:
+
+```go
+content := msg.Text
+contentType := "text/plain"
+if msg.HTML != "" {
+    content = msg.HTML
+    contentType = "text/html"
+}
+```
+
+---
+
+### Resend
+
+The Resend driver delivers email via the [Resend](https://resend.com) HTTP API.
+
+| Credential | Required | Description |
+|-----------|----------|-------------|
+| `api_key` | Yes | Resend API key |
+| `base_url` | No | API base URL (defaults to `https://api.resend.com`) |
+
+```go
+driver := &email.ResendDriver{}
+driver.Name()    // "resend"
+driver.Channel() // "email"
+```
+
+**How it works**: The driver sends a JSON POST request to `{base_url}/emails` with the `Authorization: Bearer {api_key}` header. Both HTML and plain text bodies are included when available. The response contains the Resend message ID, which is returned as `ProviderMessageID`.
+
+```go
+// Request body sent to Resend API
+type resendRequest struct {
+    From    string   `json:"from"`
+    To      []string `json:"to"`
+    Subject string   `json:"subject"`
+    HTML    string   `json:"html,omitempty"`
+    Text    string   `json:"text,omitempty"`
+}
+```
+
+---
+
+### Twilio
+
+The Twilio driver delivers SMS via the [Twilio](https://www.twilio.com) REST API.
+
+| Credential | Required | Description |
+|-----------|----------|-------------|
+| `account_sid` | Yes | Twilio Account SID |
+| `auth_token` | Yes | Twilio Auth Token |
+| `from_number` | Yes | Sender phone number (E.164 format) |
+
+```go
+driver := &sms.TwilioDriver{}
+driver.Name()    // "twilio"
+driver.Channel() // "sms"
+```
+
+**How it works**: The driver sends a form-encoded POST to Twilio's Messages API endpoint (`/2010-04-01/Accounts/{AccountSID}/Messages.json`). Authentication uses HTTP Basic Auth with the Account SID and Auth Token. The `From` number can be overridden by [scoped config](/docs/subsystems/scoped-config). The response SID is returned as `ProviderMessageID`.
+
+```go
+data := url.Values{}
+data.Set("To", msg.To)
+data.Set("From", fromNumber)
+data.Set("Body", msg.Text)
+```
+
+---
+
+### FCM (Firebase Cloud Messaging)
+
+The FCM driver delivers push notifications via the [Firebase Cloud Messaging](https://firebase.google.com/docs/cloud-messaging) HTTP v1 API.
+
+| Credential | Required | Description |
+|-----------|----------|-------------|
+| `project_id` | Yes | Firebase project ID |
+| `access_token` | Conditional | OAuth2 access token (preferred) |
+| `server_key` | Conditional | Legacy server key (fallback) |
+
+Either `access_token` or `server_key` must be provided.
+
+```go
+driver := &push.FCMDriver{}
+driver.Name()    // "fcm"
+driver.Channel() // "push"
+```
+
+**How it works**: The driver sends a JSON POST to `https://fcm.googleapis.com/v1/projects/{projectID}/messages:send`. The `msg.To` field is used as the FCM device token. The driver constructs an FCM message with a notification payload (title + body) and optional data payload.
+
+```go
+type fcmMessage struct {
+    Message struct {
+        Token        string            `json:"token"`
+        Notification *fcmNotification  `json:"notification,omitempty"`
+        Data         map[string]string `json:"data,omitempty"`
+    } `json:"message"`
+}
+```
+
+If `access_token` is provided, it is sent as a Bearer token. Otherwise, the legacy `key=` server key authentication is used.
+
+---
+
+### InApp
+
+The InApp driver is a no-op pass-through. In-app notifications are handled directly by the Herald engine, which stores them in the inbox table after the driver returns success.
+
+| Credential | Required | Description |
+|-----------|----------|-------------|
+| *(none)* | -- | No credentials needed |
+
+```go
+driver := &inapp.Driver{}
+driver.Name()    // "inapp"
+driver.Channel() // "inapp"
+```
+
+**How it works**: The `Send` method immediately returns `StatusDelivered`. The actual inbox entry is created by the Herald engine in the delivery pipeline after this driver returns. See [Inbox](/docs/subsystems/inbox) for details.
+
+```go
+func (d *Driver) Send(_ context.Context, _ *driver.OutboundMessage) (*driver.DeliveryResult, error) {
+    return &driver.DeliveryResult{Status: message.StatusDelivered}, nil
+}
+```
+
+## Registering Drivers
+
+### With Forge Extension
+
+When using the Forge extension, all built-in drivers are registered automatically:
+
+```go
+ext := extension.New()
+// Registers: smtp, resend, twilio, fcm, inapp
+```
+
+### With Herald Directly
+
+When using Herald directly (without Forge), register drivers using the `WithDriver` option:
+
+```go
+h, err := herald.New(
+    herald.WithStore(myStore),
+    herald.WithDriver(&email.SMTPDriver{}),
+    herald.WithDriver(&email.ResendDriver{}),
+    herald.WithDriver(&sms.TwilioDriver{}),
+    herald.WithDriver(&push.FCMDriver{}),
+    herald.WithDriver(&inapp.Driver{}),
+)
+```
+
+## Writing a Custom Driver
+
+To add support for a new notification service, implement the `Driver` interface:
+
+```go
+package ses
+
+import (
+    "context"
+    "github.com/xraph/herald/driver"
+    "github.com/xraph/herald/message"
+)
+
+type SESDriver struct{}
+
+func (d *SESDriver) Name() string    { return "ses" }
+func (d *SESDriver) Channel() string { return "email" }
+
+func (d *SESDriver) Validate(credentials, settings map[string]string) error {
+    if credentials["access_key_id"] == "" {
+        return fmt.Errorf("ses: missing required credential 'access_key_id'")
+    }
+    if credentials["secret_access_key"] == "" {
+        return fmt.Errorf("ses: missing required credential 'secret_access_key'")
+    }
+    return nil
+}
+
+func (d *SESDriver) Send(ctx context.Context, msg *driver.OutboundMessage) (*driver.DeliveryResult, error) {
+    accessKeyID := msg.Data["access_key_id"]
+    secretKey := msg.Data["secret_access_key"]
+    region := msg.Data["region"]
+
+    // ... call AWS SES API ...
+
+    return &driver.DeliveryResult{
+        ProviderMessageID: sesMessageID,
+        Status:            message.StatusSent,
+    }, nil
+}
+```
+
+Register the custom driver when creating your Herald instance:
+
+```go
+h, err := herald.New(
+    herald.WithStore(myStore),
+    herald.WithDriver(&ses.SESDriver{}),
+    // ... other drivers
+)
+```
+
+Then create a provider that uses the custom driver:
+
+```go
+provider := &provider.Provider{
+    Name:    "Production SES",
+    Channel: "email",
+    Driver:  "ses",
+    Credentials: map[string]string{
+        "access_key_id":     "AKIA...",
+        "secret_access_key": "secret...",
+        "region":            "us-east-1",
+    },
+}
+```

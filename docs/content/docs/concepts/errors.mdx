@@ -1,0 +1,185 @@
+---
+title: Error Handling
+description: Sentinel errors and error patterns used across Herald.
+---
+
+Herald defines sentinel errors in the root `herald` package and the `driver` package. Use `errors.Is` to check for specific error conditions in your application code.
+
+## Using errors.Is
+
+```go
+import (
+    "errors"
+    "github.com/xraph/herald"
+)
+
+result, err := h.Send(ctx, req)
+if errors.Is(err, herald.ErrTemplateNotFound) {
+    // template does not exist for this app + channel
+}
+```
+
+All Herald services and store backends return these sentinel errors. Store implementations wrap them so that `errors.Is` works regardless of which backend (PostgreSQL, SQLite, MongoDB, or in-memory) is in use.
+
+## Sentinel errors by category
+
+### Store and lifecycle errors
+
+| Error | Value | Description |
+|-------|-------|-------------|
+| `herald.ErrNoStore` | `"herald: store is required"` | No store backend was provided to `herald.New`. |
+| `herald.ErrStoreClosed` | `"herald: store is closed"` | A store operation was attempted after the store was closed. |
+| `herald.ErrMigrationFailed` | `"herald: migration failed"` | A database schema migration failed. |
+
+### Provider errors
+
+| Error | Value | Description |
+|-------|-------|-------------|
+| `herald.ErrProviderNotFound` | `"herald: provider not found"` | No provider with the given ID exists. |
+| `herald.ErrProviderDisabled` | `"herald: provider is disabled"` | The resolved provider has `Enabled: false`. |
+| `herald.ErrNoProviderConfigured` | `"herald: no provider configured for channel"` | No enabled provider exists for the requested channel after scope resolution. |
+| `herald.ErrDriverNotFound` | `"herald: driver not found"` | The driver named by the provider is not registered. |
+
+The `driver` package also defines its own not-found error:
+
+```go
+driver.ErrDriverNotFound // "herald: driver not found"
+```
+
+### Template errors
+
+| Error | Value | Description |
+|-------|-------|-------------|
+| `herald.ErrTemplateNotFound` | `"herald: template not found"` | No template with the given slug + channel exists for this app. |
+| `herald.ErrTemplateDisabled` | `"herald: template is disabled"` | The template has `Enabled: false`. |
+| `herald.ErrNoVersionForLocale` | `"herald: no template version for locale"` | No active template version matches the requested locale. |
+| `herald.ErrTemplateRenderFailed` | `"herald: template rendering failed"` | Template rendering failed (syntax error, execution error). |
+| `herald.ErrMissingRequiredVariable` | `"herald: missing required template variable"` | A required template variable was not provided in the `Data` map. |
+| `herald.ErrDuplicateSlug` | `"herald: duplicate template slug"` | A template with the same slug + channel + app already exists. |
+| `herald.ErrDuplicateLocale` | `"herald: duplicate locale version"` | A template version for the same locale already exists on this template. |
+
+### Message and delivery errors
+
+| Error | Value | Description |
+|-------|-------|-------------|
+| `herald.ErrMessageNotFound` | `"herald: message not found"` | No message with the given ID exists. |
+| `herald.ErrSendFailed` | `"herald: send failed"` | Notification delivery failed at the driver level. |
+| `herald.ErrInvalidChannel` | `"herald: invalid channel type"` | An unsupported channel type was specified. |
+
+### Inbox errors
+
+| Error | Value | Description |
+|-------|-------|-------------|
+| `herald.ErrInboxNotFound` | `"herald: in-app notification not found"` | No inbox notification with the given ID exists. |
+
+### Preference errors
+
+| Error | Value | Description |
+|-------|-------|-------------|
+| `herald.ErrPreferenceNotFound` | `"herald: user preference not found"` | No preference record exists for the given app + user. |
+| `herald.ErrOptedOut` | `"herald: user opted out"` | The user has opted out of this notification type on the requested channel. |
+
+### Scoped config errors
+
+| Error | Value | Description |
+|-------|-------|-------------|
+| `herald.ErrScopedConfigNotFound` | `"herald: scoped config not found"` | No scoped configuration exists for the given app + scope type + scope ID. |
+
+## Error handling patterns
+
+### Check for specific errors
+
+```go
+result, err := h.Send(ctx, &herald.SendRequest{
+    AppID:    "myapp",
+    Channel:  "email",
+    Template: "auth.welcome",
+    To:       []string{"user@example.com"},
+    Data:     map[string]any{"name": "Alice"},
+})
+
+switch {
+case errors.Is(err, herald.ErrTemplateNotFound):
+    // template does not exist -- check slug and channel
+case errors.Is(err, herald.ErrNoProviderConfigured):
+    // no email provider configured for this app
+case errors.Is(err, herald.ErrDriverNotFound):
+    // the provider's driver is not registered
+case err != nil:
+    // unexpected error
+default:
+    // success -- check result.Status
+}
+```
+
+### Template resolution failures
+
+When sending with a template, Herald resolves the template by slug and channel, then renders the appropriate locale version. Multiple errors can occur in this chain:
+
+```go
+result, err := h.Send(ctx, req)
+
+switch {
+case errors.Is(err, herald.ErrTemplateNotFound):
+    // slug + channel combination not found for this app
+case errors.Is(err, herald.ErrTemplateDisabled):
+    // template exists but is disabled
+case errors.Is(err, herald.ErrNoVersionForLocale):
+    // no active version for the requested locale
+case errors.Is(err, herald.ErrMissingRequiredVariable):
+    // a required variable was not provided in Data
+case errors.Is(err, herald.ErrTemplateRenderFailed):
+    // Go template execution error
+}
+```
+
+### Provider resolution failures
+
+The scope resolver walks the chain (user -> org -> app -> fallback) looking for an enabled provider. If none is found:
+
+```go
+if errors.Is(err, herald.ErrNoProviderConfigured) {
+    // No enabled provider for this channel.
+    // Either create a provider or configure a scoped config.
+}
+```
+
+### Preference opt-out handling
+
+Herald checks user preferences automatically during `Send`. If the user has opted out, the send returns a result (not an error) with the opt-out reason:
+
+```go
+result, err := h.Send(ctx, req)
+if err == nil && result.Error == "user opted out" {
+    // User opted out of this notification type on this channel.
+    // result.Status is StatusSent (silent skip).
+}
+```
+
+### Store error mapping
+
+All store backends map database-level errors to Herald sentinel errors. For example, a PostgreSQL unique constraint violation on the template slug is mapped to `ErrDuplicateSlug`, and a "no rows" result is mapped to the appropriate `Err*NotFound` error.
+
+```go
+err := store.CreateTemplate(ctx, tmpl)
+if errors.Is(err, herald.ErrDuplicateSlug) {
+    // A template with this slug + channel already exists for this app.
+}
+```
+
+## Wrapped errors
+
+Service methods may wrap sentinel errors with additional context using `fmt.Errorf` and `%w`. Always use `errors.Is` rather than string comparison:
+
+```go
+// Works correctly even when the error is wrapped with context.
+if errors.Is(err, herald.ErrTemplateNotFound) {
+    // ...
+}
+```
+
+For example, the `Send` method wraps template errors:
+
+```go
+// Internally: fmt.Errorf("%w: %v", ErrTemplateNotFound, storeErr)
+```

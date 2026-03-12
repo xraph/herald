@@ -1,0 +1,219 @@
+---
+title: Preferences
+description: Manage per-user notification preferences with per-type per-channel opt-in/opt-out controls.
+---
+
+Herald's preference system lets users control which notifications they receive and on which channels. Preferences are checked automatically during the [delivery pipeline](/docs/subsystems/delivery) -- if a user has opted out, the notification is silently skipped.
+
+## Preference Entity
+
+The `preference.Preference` struct stores a user's notification preferences for an application:
+
+```go
+type Preference struct {
+    ID        id.PreferenceID              `json:"id"`
+    AppID     string                       `json:"app_id"`
+    UserID    string                       `json:"user_id"`
+    Overrides map[string]ChannelPreference `json:"overrides"`
+    CreatedAt time.Time                    `json:"created_at"`
+    UpdatedAt time.Time                    `json:"updated_at"`
+}
+```
+
+Preference IDs use the `hprf` prefix.
+
+## ChannelPreference
+
+The `ChannelPreference` struct holds per-channel opt-in/opt-out flags for a specific notification type:
+
+```go
+type ChannelPreference struct {
+    Email *bool `json:"email,omitempty"`
+    SMS   *bool `json:"sms,omitempty"`
+    Push  *bool `json:"push,omitempty"`
+    InApp *bool `json:"inapp,omitempty"`
+}
+```
+
+Each field is a `*bool` (pointer to bool) to distinguish three states:
+
+| Value | Meaning |
+|-------|---------|
+| `nil` | No preference set -- use default (opted **in**) |
+| `true` | Explicitly opted **in** |
+| `false` | Explicitly opted **out** |
+
+## Per-Type Per-Channel Control
+
+The `Overrides` map is keyed by notification type slug (the template slug). This gives users granular control over each notification type on each channel:
+
+```go
+pref := &preference.Preference{
+    AppID:  "app_01abc...",
+    UserID: "user_01xyz...",
+    Overrides: map[string]preference.ChannelPreference{
+        "auth.welcome": {
+            Email: boolPtr(true),   // receive welcome emails
+            InApp: boolPtr(true),   // receive welcome in-app
+        },
+        "auth.password-changed": {
+            Email: boolPtr(true),   // receive password change emails
+            SMS:   boolPtr(false),  // do NOT receive password change SMS
+        },
+        "marketing.weekly-digest": {
+            Email: boolPtr(false),  // opt out of marketing emails
+            Push:  boolPtr(false),  // opt out of marketing push
+        },
+    },
+}
+
+func boolPtr(b bool) *bool { return &b }
+```
+
+## Opt-Out Check
+
+The `IsOptedOut` method checks whether a user has explicitly opted out of a specific notification type on a specific channel:
+
+```go
+func (p *Preference) IsOptedOut(notifType string, channel string) bool {
+    if p == nil || p.Overrides == nil {
+        return false
+    }
+
+    cp, ok := p.Overrides[notifType]
+    if !ok {
+        return false
+    }
+
+    switch channel {
+    case "email":
+        return cp.Email != nil && !*cp.Email
+    case "sms":
+        return cp.SMS != nil && !*cp.SMS
+    case "push":
+        return cp.Push != nil && !*cp.Push
+    case "inapp":
+        return cp.InApp != nil && !*cp.InApp
+    default:
+        return false
+    }
+}
+```
+
+Key behaviors:
+- Returns `false` (not opted out) if no preference exists at all
+- Returns `false` if no override exists for the notification type
+- Returns `false` if the channel field is `nil` (no preference set)
+- Returns `true` only when the channel field is explicitly set to `false`
+
+## Default Behavior
+
+When no preference is set, Herald **always delivers** the notification. The preference system is opt-out only -- users must explicitly disable channels they do not want to receive.
+
+This means:
+- A brand-new user with no preferences receives all notifications on all channels
+- Setting `Email: boolPtr(true)` is functionally equivalent to having no preference for email
+- The only way to prevent delivery is to set a channel to `false`
+
+## Upsert Semantics
+
+The store uses upsert semantics for `SetPreference`. If a preference already exists for the `(app_id, user_id)` pair, it is replaced:
+
+```go
+err := store.SetPreference(ctx, pref)
+```
+
+This simplifies the API -- callers always provide the full preference state, and the store handles insert-or-update.
+
+## Store Interface
+
+```go
+type Store interface {
+    GetPreference(ctx context.Context, appID string, userID string) (*Preference, error)
+    SetPreference(ctx context.Context, p *Preference) error
+    DeletePreference(ctx context.Context, appID string, userID string) error
+}
+```
+
+## Integration with Delivery
+
+During `Send`, Herald checks preferences before proceeding with template rendering and provider resolution:
+
+```go
+// In Herald.Send()
+if req.UserID != "" && req.Template != "" {
+    pref, _ := h.store.GetPreference(ctx, req.AppID, req.UserID)
+    if pref != nil && pref.IsOptedOut(req.Template, channel) {
+        h.logger.Debug("herald: user opted out",
+            "user_id", req.UserID,
+            "template", req.Template,
+            "channel", channel,
+        )
+        return &SendResult{Status: message.StatusSent, Error: "user opted out"}, nil
+    }
+}
+```
+
+Note that both `UserID` and `Template` must be present for the preference check to run. Direct sends without a template slug bypass preference checking.
+
+## API Endpoints
+
+Preferences are managed through the `/preferences` route group:
+
+| Method | Path | Operation |
+|--------|------|-----------|
+| `GET` | `/preferences` | Get preferences (query: `app_id`, `user_id`) |
+| `PUT` | `/preferences` | Update preferences (upsert) |
+
+### Update Preferences Request
+
+```json
+{
+  "app_id": "app_01abc...",
+  "user_id": "user_01xyz...",
+  "overrides": {
+    "auth.welcome": {
+      "email": true,
+      "inapp": true
+    },
+    "marketing.weekly-digest": {
+      "email": false,
+      "push": false
+    }
+  }
+}
+```
+
+### Get Preferences Response
+
+```json
+{
+  "id": "hprf_01j8x7k2...",
+  "app_id": "app_01abc...",
+  "user_id": "user_01xyz...",
+  "overrides": {
+    "auth.welcome": {
+      "email": true,
+      "inapp": true
+    },
+    "marketing.weekly-digest": {
+      "email": false,
+      "push": false
+    }
+  },
+  "created_at": "2025-01-15T10:30:00Z",
+  "updated_at": "2025-01-20T14:00:00Z"
+}
+```
+
+## Building a Preferences UI
+
+A typical preferences UI shows a matrix of notification types and channels. For each cell, display a toggle based on the `ChannelPreference` value:
+
+| Notification Type | Email | SMS | Push | In-App |
+|-------------------|-------|-----|------|--------|
+| Welcome | on | -- | -- | on |
+| Password Changed | on | off | -- | on |
+| Weekly Digest | off | -- | off | -- |
+
+Cells with `--` represent `nil` values (no explicit preference, defaults to on). This allows you to only show relevant channels per notification type.

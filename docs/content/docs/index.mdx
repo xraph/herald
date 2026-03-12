@@ -1,0 +1,139 @@
+---
+title: Introduction
+description: Unified multi-channel notification delivery engine for Go.
+---
+
+Herald is a Go library that provides **multi-channel notification delivery** behind a single API surface. It routes notifications through Email (SMTP, Resend), SMS (Twilio), Push (FCM), and In-App (inbox) channels with pluggable provider drivers, a template engine with i18n support, user preference management, and scoped configuration overrides.
+
+Herald is a **library** -- not a standalone service. You bring your own database, provider credentials, and process lifecycle. Herald provides the plumbing.
+
+## What it does
+
+- **Multi-channel delivery** -- Send notifications across email, SMS, push, and in-app channels through a unified `Send` and `Notify` API. Each channel is backed by a pluggable driver that handles the transport-specific protocol.
+- **Template engine with i18n** -- Define notification templates with Go template syntax, locale-specific versions, and typed variables with required/optional validation. The renderer resolves the best locale match (exact, language-only, or default fallback) and renders subject, HTML body, text body, and title fields.
+- **In-app inbox** -- The `inapp` channel automatically stores notifications in a per-user inbox with read/unread tracking, unread counts, mark-all-read, and expiration support.
+- **User preferences** -- Users can opt out of specific notification types on specific channels. The engine checks preferences before sending and silently skips opted-out notifications.
+- **Scoped configuration** -- Override provider selection, sender identity, and locale at the app, organization, or user level. The scope resolver walks the chain `user -> org -> app -> default` to find the best match.
+- **Multiple store backends** -- Four backends implement the same composite `store.Store` interface: `memory` (testing), `postgres` (PostgreSQL via Grove), `sqlite` (SQLite via Grove), and `mongo` (MongoDB via Grove). All support Migrate, Ping, and Close lifecycle methods.
+- **Built-in drivers** -- Five drivers ship out of the box: `smtp` (standard SMTP with TLS), `resend` (Resend HTTP API), `twilio` (Twilio REST API), `fcm` (Firebase Cloud Messaging v1), and `inapp` (no-op driver for inbox storage).
+- **TypeID identifiers** -- All entities use type-prefixed, K-sortable, UUIDv7-based identifiers. Each entity type has its own prefix (`hpvd` for providers, `htpl` for templates, `hmsg` for messages, and so on), so passing the wrong ID type fails at parse time.
+- **Delivery log** -- Every send attempt is recorded as a `message.Message` with status tracking (`queued`, `sending`, `sent`, `failed`, `bounced`, `delivered`), provider attribution, and metadata.
+- **Forge extension** -- Herald ships with a `extension.Extension` that integrates with the Forge framework for automatic route registration, migration, health checks, DI container binding, and YAML-based configuration.
+
+## Design philosophy
+
+**Library, not service.** Herald is a set of Go packages you import. You control `main`, the database connection, the provider credentials, and the process lifecycle.
+
+**Interfaces over implementations.** Every subsystem defines a Go interface (`provider.Store`, `template.Store`, `message.Store`, `inbox.Store`, `preference.Store`, `scope.Store`). Swap any storage backend with a single type change.
+
+**Composable stores.** The `store.Store` interface composes all six subsystem store interfaces plus Migrate, Ping, and Close. Pass a single backend value wherever a store is needed.
+
+**Scope-aware delivery.** The `scope.Resolver` walks the configuration hierarchy (`user -> org -> app -> default`) to resolve the correct provider and sender identity for each notification. This enables per-organization branding and per-user provider overrides without any application-level logic.
+
+**TypeID everywhere.** All entities use type-prefixed, K-sortable identifiers via `id.ID`. Passing an `hpvd_` (provider) ID where an `htpl_` (template) ID is expected fails at parse time.
+
+## Quick look
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+
+    "github.com/xraph/herald"
+    "github.com/xraph/herald/driver/email"
+    "github.com/xraph/herald/driver/sms"
+    "github.com/xraph/herald/id"
+    "github.com/xraph/herald/provider"
+    "github.com/xraph/herald/store/memory"
+    "github.com/xraph/herald/template"
+)
+
+func main() {
+    ctx := context.Background()
+
+    // 1. Create an in-memory store.
+    store := memory.New()
+
+    // 2. Create the Herald engine with drivers.
+    h, err := herald.New(
+        herald.WithStore(store),
+        herald.WithDriver(&email.ResendDriver{}),
+        herald.WithDriver(&sms.TwilioDriver{}),
+    )
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // 3. Register an email provider with Resend credentials.
+    _ = store.CreateProvider(ctx, &provider.Provider{
+        ID:      id.NewProviderID(),
+        AppID:   "myapp",
+        Name:    "Resend Production",
+        Channel: "email",
+        Driver:  "resend",
+        Credentials: map[string]string{
+            "api_key": "re_123abc",
+        },
+        Settings: map[string]string{
+            "from": "hello@example.com",
+            "from_name": "My App",
+        },
+        Priority: 1,
+        Enabled:  true,
+    })
+
+    // 4. Create a template with an English version.
+    tmpl := &template.Template{
+        ID:      id.NewTemplateID(),
+        AppID:   "myapp",
+        Slug:    "order.confirmation",
+        Name:    "Order Confirmation",
+        Channel: "email",
+        Category: "transactional",
+        Variables: []template.Variable{
+            {Name: "user_name", Type: "string", Required: true},
+            {Name: "order_id", Type: "string", Required: true},
+        },
+        Enabled: true,
+    }
+    _ = store.CreateTemplate(ctx, tmpl)
+    _ = store.CreateVersion(ctx, &template.Version{
+        ID:         id.NewTemplateVersionID(),
+        TemplateID: tmpl.ID,
+        Locale:     "en",
+        Subject:    "Order {{.order_id}} confirmed",
+        Text:       "Hi {{.user_name}}, your order {{.order_id}} has been confirmed.",
+        Active:     true,
+    })
+
+    // 5. Send the notification.
+    result, err := h.Send(ctx, &herald.SendRequest{
+        AppID:    "myapp",
+        Channel:  "email",
+        Template: "order.confirmation",
+        To:       []string{"customer@example.com"},
+        Data: map[string]any{
+            "user_name": "Alice",
+            "order_id":  "ORD-42",
+        },
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    fmt.Printf("sent: message_id=%s status=%s\n", result.MessageID, result.Status)
+    // Output: sent: message_id=hmsg_01h... status=sent
+}
+```
+
+## Where to go next
+
+<Cards>
+  <Card title="Getting started" href="/docs/getting-started" description="Install Herald and send your first notification in under five minutes." />
+  <Card title="Architecture" href="/docs/architecture" description="Understand how the packages fit together and how the delivery pipeline works." />
+  <Card title="Concepts" href="/docs/concepts" description="Learn about Providers, Templates, Messages, Inbox, Preferences, and Scoped Config." />
+  <Card title="Stores" href="/docs/stores" description="Configure Memory, PostgreSQL, SQLite, or MongoDB store backends." />
+</Cards>

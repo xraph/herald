@@ -1,0 +1,591 @@
+---
+title: Go Package Reference
+description: Complete Go package index for Herald.
+---
+
+All Herald packages are importable from the module `github.com/xraph/herald`. This page is a comprehensive index of every package, its key types, and its primary functions.
+
+## Package Index
+
+| Package | Import Path | Description |
+|---------|-------------|-------------|
+| `herald` | `github.com/xraph/herald` | Root package with engine, send/notify, config, and sentinel errors |
+| `id` | `github.com/xraph/herald/id` | TypeID-based entity identifiers |
+| `provider` | `github.com/xraph/herald/provider` | Notification provider entity and store interface |
+| `template` | `github.com/xraph/herald/template` | Template definitions, versions, rendering |
+| `message` | `github.com/xraph/herald/message` | Delivery log entity and store interface |
+| `inbox` | `github.com/xraph/herald/inbox` | In-app notification entity and store interface |
+| `preference` | `github.com/xraph/herald/preference` | User notification preferences |
+| `scope` | `github.com/xraph/herald/scope` | Scoped config, resolver, and scope types |
+| `driver` | `github.com/xraph/herald/driver` | Driver interface, registry, and outbound message types |
+| `driver/email` | `github.com/xraph/herald/driver/email` | SMTP and Resend email drivers |
+| `driver/sms` | `github.com/xraph/herald/driver/sms` | Twilio SMS driver |
+| `driver/push` | `github.com/xraph/herald/driver/push` | FCM push notification driver |
+| `driver/inapp` | `github.com/xraph/herald/driver/inapp` | In-app notification driver |
+| `store` | `github.com/xraph/herald/store` | Composite store interface definition |
+| `store/memory` | `github.com/xraph/herald/store/memory` | In-memory store for development/testing |
+| `store/postgres` | `github.com/xraph/herald/store/postgres` | PostgreSQL backend via Grove ORM |
+| `store/sqlite` | `github.com/xraph/herald/store/sqlite` | SQLite backend via Grove ORM |
+| `store/mongo` | `github.com/xraph/herald/store/mongo` | MongoDB backend via Grove ORM |
+| `api` | `github.com/xraph/herald/api` | Forge-integrated HTTP API handler |
+| `extension` | `github.com/xraph/herald/extension` | Forge extension with lifecycle integration |
+
+## Root Package: `github.com/xraph/herald`
+
+### Herald Engine
+
+```go
+type Herald struct { /* unexported fields */ }
+
+func New(opts ...Option) (*Herald, error)
+
+func (h *Herald) Send(ctx context.Context, req *SendRequest) (*SendResult, error)
+func (h *Herald) Notify(ctx context.Context, req *NotifyRequest) ([]*SendResult, error)
+func (h *Herald) SeedDefaultTemplates(ctx context.Context, appID string) error
+func (h *Herald) Start(ctx context.Context)
+func (h *Herald) Stop(ctx context.Context)
+func (h *Herald) Health(ctx context.Context) error
+func (h *Herald) Store() store.Store
+func (h *Herald) Drivers() *driver.Registry
+func (h *Herald) Config() Config
+```
+
+### Options
+
+```go
+type Option func(*Herald) error
+
+func WithStore(s store.Store) Option
+func WithDriver(d driver.Driver) Option
+func WithLogger(logger *slog.Logger) Option
+func WithDefaultLocale(locale string) Option
+func WithMaxBatchSize(n int) Option
+```
+
+### Config
+
+```go
+type Config struct {
+    DefaultLocale  string // default: "en"
+    MaxBatchSize   int    // default: 100
+    TruncateBodyAt int    // default: 1000
+}
+
+func DefaultConfig() Config
+```
+
+### Request and Result Types
+
+```go
+type SendRequest struct {
+    AppID    string            `json:"app_id"`
+    EnvID    string            `json:"env_id,omitempty"`
+    OrgID    string            `json:"org_id,omitempty"`
+    UserID   string            `json:"user_id,omitempty"`
+    Channel  string            `json:"channel"`
+    Template string            `json:"template,omitempty"`
+    Locale   string            `json:"locale,omitempty"`
+    To       []string          `json:"to"`
+    Data     map[string]any    `json:"data,omitempty"`
+    Subject  string            `json:"subject,omitempty"`
+    Body     string            `json:"body,omitempty"`
+    Async    bool              `json:"async,omitempty"`
+    Metadata map[string]string `json:"metadata,omitempty"`
+}
+
+type NotifyRequest struct {
+    AppID    string            `json:"app_id"`
+    EnvID    string            `json:"env_id,omitempty"`
+    OrgID    string            `json:"org_id,omitempty"`
+    UserID   string            `json:"user_id,omitempty"`
+    Template string            `json:"template"`
+    Locale   string            `json:"locale,omitempty"`
+    To       []string          `json:"to"`
+    Data     map[string]any    `json:"data,omitempty"`
+    Channels []string          `json:"channels"`
+    Async    bool              `json:"async,omitempty"`
+    Metadata map[string]string `json:"metadata,omitempty"`
+}
+
+type SendResult struct {
+    MessageID  id.MessageID   `json:"message_id"`
+    Status     message.Status `json:"status"`
+    ProviderID string         `json:"provider_id,omitempty"`
+    Error      string         `json:"error,omitempty"`
+}
+```
+
+### Channel Types
+
+```go
+type ChannelType string
+
+const (
+    ChannelEmail ChannelType = "email"
+    ChannelSMS   ChannelType = "sms"
+    ChannelPush  ChannelType = "push"
+    ChannelInApp ChannelType = "inapp"
+)
+```
+
+### Sentinel Errors
+
+```go
+var (
+    ErrNoStore                 = errors.New("herald: store is required")
+    ErrProviderNotFound        = errors.New("herald: provider not found")
+    ErrProviderDisabled        = errors.New("herald: provider is disabled")
+    ErrNoProviderConfigured    = errors.New("herald: no provider configured for channel")
+    ErrDriverNotFound          = errors.New("herald: driver not found")
+    ErrTemplateNotFound        = errors.New("herald: template not found")
+    ErrTemplateDisabled        = errors.New("herald: template is disabled")
+    ErrNoVersionForLocale      = errors.New("herald: no template version for locale")
+    ErrTemplateRenderFailed    = errors.New("herald: template rendering failed")
+    ErrMissingRequiredVariable = errors.New("herald: missing required template variable")
+    ErrMessageNotFound         = errors.New("herald: message not found")
+    ErrInboxNotFound           = errors.New("herald: in-app notification not found")
+    ErrPreferenceNotFound      = errors.New("herald: user preference not found")
+    ErrScopedConfigNotFound    = errors.New("herald: scoped config not found")
+    ErrInvalidChannel          = errors.New("herald: invalid channel type")
+    ErrSendFailed              = errors.New("herald: send failed")
+    ErrOptedOut                = errors.New("herald: user opted out")
+    ErrStoreClosed             = errors.New("herald: store is closed")
+    ErrMigrationFailed         = errors.New("herald: migration failed")
+    ErrDuplicateSlug           = errors.New("herald: duplicate template slug")
+    ErrDuplicateLocale         = errors.New("herald: duplicate locale version")
+)
+```
+
+## id
+
+TypeID-based identity types for all Herald entities. IDs are K-sortable (UUIDv7-based), globally unique, and URL-safe in the format `prefix_suffix`.
+
+```go
+type Prefix string
+
+const (
+    PrefixProvider        Prefix = "hpvd"
+    PrefixTemplate        Prefix = "htpl"
+    PrefixTemplateVersion Prefix = "htpv"
+    PrefixMessage         Prefix = "hmsg"
+    PrefixInbox           Prefix = "hinb"
+    PrefixPreference      Prefix = "hprf"
+    PrefixScopedConfig    Prefix = "hscf"
+)
+
+type ID struct { /* wraps typeid.TypeID */ }
+
+func New(prefix Prefix) ID
+func Parse(s string) (ID, error)
+func ParseWithPrefix(s string, expected Prefix) (ID, error)
+func MustParse(s string) ID
+
+func (i ID) String() string
+func (i ID) Prefix() Prefix
+func (i ID) IsNil() bool
+// Implements: TextMarshaler, TextUnmarshaler, driver.Valuer,
+//             sql.Scanner, json.Marshaler, json.Unmarshaler,
+//             bson.ValueMarshaler, bson.ValueUnmarshaler
+```
+
+### Type Aliases and Convenience Constructors
+
+```go
+type ProviderID        = ID
+type TemplateID        = ID
+type TemplateVersionID = ID
+type MessageID         = ID
+type InboxID           = ID
+type PreferenceID      = ID
+type ScopedConfigID    = ID
+
+func NewProviderID() ID
+func NewTemplateID() ID
+func NewTemplateVersionID() ID
+func NewMessageID() ID
+func NewInboxID() ID
+func NewPreferenceID() ID
+func NewScopedConfigID() ID
+```
+
+### Convenience Parsers (type-safe)
+
+```go
+func ParseProviderID(s string) (ID, error)
+func ParseTemplateID(s string) (ID, error)
+func ParseTemplateVersionID(s string) (ID, error)
+func ParseMessageID(s string) (ID, error)
+func ParseInboxID(s string) (ID, error)
+func ParsePreferenceID(s string) (ID, error)
+func ParseScopedConfigID(s string) (ID, error)
+func ParseAny(s string) (ID, error)
+```
+
+## provider
+
+```go
+type Provider struct {
+    ID          id.ProviderID     `json:"id"`
+    AppID       string            `json:"app_id"`
+    Name        string            `json:"name"`
+    Channel     string            `json:"channel"`
+    Driver      string            `json:"driver"`
+    Credentials map[string]string `json:"credentials"`
+    Settings    map[string]string `json:"settings"`
+    Priority    int               `json:"priority"`
+    Enabled     bool              `json:"enabled"`
+    CreatedAt   time.Time         `json:"created_at"`
+    UpdatedAt   time.Time         `json:"updated_at"`
+}
+
+type Store interface {
+    CreateProvider(ctx context.Context, p *Provider) error
+    GetProvider(ctx context.Context, id id.ProviderID) (*Provider, error)
+    UpdateProvider(ctx context.Context, p *Provider) error
+    DeleteProvider(ctx context.Context, id id.ProviderID) error
+    ListProviders(ctx context.Context, appID, channel string) ([]*Provider, error)
+    ListAllProviders(ctx context.Context, appID string) ([]*Provider, error)
+}
+```
+
+## template
+
+```go
+type Template struct {
+    ID        id.TemplateID `json:"id"`
+    AppID     string        `json:"app_id"`
+    Slug      string        `json:"slug"`
+    Name      string        `json:"name"`
+    Channel   string        `json:"channel"`
+    Category  string        `json:"category"`
+    Variables []Variable    `json:"variables,omitempty"`
+    IsSystem  bool          `json:"is_system"`
+    Enabled   bool          `json:"enabled"`
+    Versions  []Version     `json:"versions,omitempty"`
+    CreatedAt time.Time     `json:"created_at"`
+    UpdatedAt time.Time     `json:"updated_at"`
+}
+
+type Version struct {
+    ID         id.TemplateVersionID `json:"id"`
+    TemplateID id.TemplateID        `json:"template_id"`
+    Locale     string               `json:"locale"`
+    Subject    string               `json:"subject"`
+    HTML       string               `json:"html"`
+    Text       string               `json:"text"`
+    Title      string               `json:"title"`
+    Active     bool                 `json:"active"`
+    CreatedAt  time.Time            `json:"created_at"`
+    UpdatedAt  time.Time            `json:"updated_at"`
+}
+
+type Variable struct {
+    Name     string `json:"name"`
+    Type     string `json:"type"`
+    Required bool   `json:"required"`
+    Default  string `json:"default,omitempty"`
+}
+
+type RenderedContent struct {
+    Subject string
+    HTML    string
+    Text    string
+    Title   string
+}
+
+type Store interface {
+    CreateTemplate(ctx context.Context, t *Template) error
+    GetTemplate(ctx context.Context, id id.TemplateID) (*Template, error)
+    GetTemplateBySlug(ctx context.Context, appID, slug, channel string) (*Template, error)
+    UpdateTemplate(ctx context.Context, t *Template) error
+    DeleteTemplate(ctx context.Context, id id.TemplateID) error
+    ListTemplates(ctx context.Context, appID string) ([]*Template, error)
+    ListTemplatesByChannel(ctx context.Context, appID, channel string) ([]*Template, error)
+    CreateVersion(ctx context.Context, v *Version) error
+    GetVersion(ctx context.Context, id id.TemplateVersionID) (*Version, error)
+    UpdateVersion(ctx context.Context, v *Version) error
+    DeleteVersion(ctx context.Context, id id.TemplateVersionID) error
+    ListVersions(ctx context.Context, templateID id.TemplateID) ([]*Version, error)
+}
+```
+
+## message
+
+```go
+type Status string
+
+const (
+    StatusQueued    Status = "queued"
+    StatusSending   Status = "sending"
+    StatusSent      Status = "sent"
+    StatusFailed    Status = "failed"
+    StatusBounced   Status = "bounced"
+    StatusDelivered Status = "delivered"
+)
+
+type Message struct {
+    ID          id.MessageID      `json:"id"`
+    AppID       string            `json:"app_id"`
+    EnvID       string            `json:"env_id"`
+    TemplateID  string            `json:"template_id"`
+    ProviderID  string            `json:"provider_id"`
+    Channel     string            `json:"channel"`
+    Recipient   string            `json:"recipient"`
+    Subject     string            `json:"subject"`
+    Body        string            `json:"body"`
+    Status      Status            `json:"status"`
+    Error       string            `json:"error"`
+    Metadata    map[string]string `json:"metadata"`
+    Async       bool              `json:"async"`
+    Attempts    int               `json:"attempts"`
+    SentAt      *time.Time        `json:"sent_at,omitempty"`
+    DeliveredAt *time.Time        `json:"delivered_at,omitempty"`
+    CreatedAt   time.Time         `json:"created_at"`
+}
+
+type ListOptions struct {
+    Channel string
+    Status  Status
+    Offset  int
+    Limit   int
+}
+
+type Store interface {
+    CreateMessage(ctx context.Context, m *Message) error
+    GetMessage(ctx context.Context, id id.MessageID) (*Message, error)
+    UpdateMessageStatus(ctx context.Context, id id.MessageID, status Status, errMsg string) error
+    ListMessages(ctx context.Context, appID string, opts ListOptions) ([]*Message, error)
+}
+```
+
+## inbox
+
+```go
+type Notification struct {
+    ID        id.InboxID        `json:"id"`
+    AppID     string            `json:"app_id"`
+    EnvID     string            `json:"env_id"`
+    UserID    string            `json:"user_id"`
+    Type      string            `json:"type"`
+    Title     string            `json:"title"`
+    Body      string            `json:"body"`
+    ActionURL string            `json:"action_url"`
+    ImageURL  string            `json:"image_url"`
+    Read      bool              `json:"read"`
+    ReadAt    *time.Time        `json:"read_at,omitempty"`
+    Metadata  map[string]string `json:"metadata"`
+    ExpiresAt *time.Time        `json:"expires_at,omitempty"`
+    CreatedAt time.Time         `json:"created_at"`
+}
+
+type Store interface {
+    CreateNotification(ctx context.Context, n *Notification) error
+    GetNotification(ctx context.Context, id id.InboxID) (*Notification, error)
+    DeleteNotification(ctx context.Context, id id.InboxID) error
+    MarkRead(ctx context.Context, id id.InboxID) error
+    MarkAllRead(ctx context.Context, appID, userID string) error
+    UnreadCount(ctx context.Context, appID, userID string) (int, error)
+    ListNotifications(ctx context.Context, appID, userID string, limit, offset int) ([]*Notification, error)
+}
+```
+
+## preference
+
+```go
+type ChannelPreference struct {
+    Email *bool `json:"email,omitempty"`
+    SMS   *bool `json:"sms,omitempty"`
+    Push  *bool `json:"push,omitempty"`
+    InApp *bool `json:"inapp,omitempty"`
+}
+
+type Preference struct {
+    ID        id.PreferenceID                `json:"id"`
+    AppID     string                         `json:"app_id"`
+    UserID    string                         `json:"user_id"`
+    Overrides map[string]ChannelPreference   `json:"overrides"`
+    CreatedAt time.Time                      `json:"created_at"`
+    UpdatedAt time.Time                      `json:"updated_at"`
+}
+
+func (p *Preference) IsOptedOut(templateSlug, channel string) bool
+
+type Store interface {
+    GetPreference(ctx context.Context, appID, userID string) (*Preference, error)
+    SetPreference(ctx context.Context, p *Preference) error
+    DeletePreference(ctx context.Context, appID, userID string) error
+}
+```
+
+## scope
+
+```go
+type ScopeType string
+
+const (
+    ScopeApp  ScopeType = "app"
+    ScopeOrg  ScopeType = "org"
+    ScopeUser ScopeType = "user"
+)
+
+type Config struct {
+    ID              id.ScopedConfigID `json:"id"`
+    AppID           string            `json:"app_id"`
+    Scope           ScopeType         `json:"scope"`
+    ScopeID         string            `json:"scope_id"`
+    EmailProviderID string            `json:"email_provider_id"`
+    SMSProviderID   string            `json:"sms_provider_id"`
+    PushProviderID  string            `json:"push_provider_id"`
+    FromEmail       string            `json:"from_email"`
+    FromName        string            `json:"from_name"`
+    FromPhone       string            `json:"from_phone"`
+    DefaultLocale   string            `json:"default_locale"`
+    CreatedAt       time.Time         `json:"created_at"`
+    UpdatedAt       time.Time         `json:"updated_at"`
+}
+
+func (c *Config) ProviderIDFor(channel string) string
+
+type Store interface {
+    GetScopedConfig(ctx context.Context, appID string, scopeType ScopeType, scopeID string) (*Config, error)
+    SetScopedConfig(ctx context.Context, cfg *Config) error
+    DeleteScopedConfig(ctx context.Context, id id.ScopedConfigID) error
+    ListScopedConfigs(ctx context.Context, appID string) ([]*Config, error)
+}
+```
+
+### Resolver
+
+```go
+type Resolver struct { /* unexported fields */ }
+
+func NewResolver(scopeStore Store, providerStore provider.Store, logger *slog.Logger) *Resolver
+
+type ResolveResult struct {
+    Provider *provider.Provider
+    Config   *Config
+}
+
+func (r *Resolver) ResolveProvider(ctx context.Context, appID, orgID, userID, channel string) (*ResolveResult, error)
+```
+
+Resolution order: user -> org -> app -> first enabled provider by priority.
+
+## driver
+
+```go
+type Driver interface {
+    Name() string
+    Channel() string
+    Send(ctx context.Context, msg *OutboundMessage) (*DeliveryResult, error)
+    Validate(credentials map[string]string) error
+}
+
+type OutboundMessage struct {
+    To       string
+    From     string
+    FromName string
+    Subject  string
+    HTML     string
+    Text     string
+    Title    string
+    Data     map[string]string
+}
+
+type DeliveryResult struct {
+    ProviderMessageID string
+    Status            string
+}
+
+type Registry struct { /* unexported fields */ }
+
+func NewRegistry() *Registry
+func (r *Registry) Register(d Driver)
+func (r *Registry) Get(name string) (Driver, error)
+func (r *Registry) List() []Driver
+```
+
+### Built-in Drivers
+
+| Driver | Package | Name | Channel |
+|--------|---------|------|---------|
+| `SMTPDriver` | `herald/driver/email` | `"smtp"` | `"email"` |
+| `ResendDriver` | `herald/driver/email` | `"resend"` | `"email"` |
+| `TwilioDriver` | `herald/driver/sms` | `"twilio"` | `"sms"` |
+| `FCMDriver` | `herald/driver/push` | `"fcm"` | `"push"` |
+| `Driver` | `herald/driver/inapp` | `"inapp"` | `"inapp"` |
+
+## store
+
+```go
+type Store interface {
+    provider.Store    // 6 methods
+    template.Store    // 12 methods
+    message.Store     // 4 methods
+    inbox.Store       // 7 methods
+    preference.Store  // 3 methods
+    scope.Store       // 4 methods
+
+    Migrate(ctx context.Context) error
+    Ping(ctx context.Context) error
+    Close() error
+}
+```
+
+### Store Implementations
+
+| Backend | Constructor | Driver Dependency |
+|---------|-------------|-------------------|
+| Memory | `memory.New() *Store` | None |
+| PostgreSQL | `postgres.New(db *grove.DB) *Store` | `grove/drivers/pgdriver` |
+| SQLite | `sqlite.New(db *grove.DB) *Store` | `grove/drivers/sqlitedriver` |
+| MongoDB | `mongo.New(db *grove.DB) *Store` | `grove/drivers/mongodriver` |
+
+## api
+
+```go
+type ForgeAPI struct { /* unexported fields */ }
+
+func NewForgeAPI(s store.Store, h *herald.Herald, logger forge.Logger) *ForgeAPI
+func (a *ForgeAPI) RegisterRoutes(router forge.Router)
+```
+
+## extension
+
+```go
+type Extension struct { /* embeds forge.BaseExtension */ }
+
+func New(opts ...ExtOption) *Extension
+func (e *Extension) Register(fapp forge.App) error
+func (e *Extension) Init(fapp forge.App) error
+func (e *Extension) Start(ctx context.Context) error
+func (e *Extension) Stop(ctx context.Context) error
+func (e *Extension) Health(ctx context.Context) error
+func (e *Extension) Herald() *herald.Herald
+func (e *Extension) API() *api.ForgeAPI
+func (e *Extension) RegisterRoutes(router forge.Router)
+func (e *Extension) BasePath() string
+
+type ExtOption func(*Extension)
+
+func WithStore(s store.Store) ExtOption
+func WithBasePath(path string) ExtOption
+func WithConfig(cfg Config) ExtOption
+func WithHeraldOption(opt herald.Option) ExtOption
+func WithDriver(d driver.Driver) ExtOption
+func WithDisableRoutes() ExtOption
+func WithDisableMigrate() ExtOption
+func WithRequireConfig(require bool) ExtOption
+func WithGroveDatabase(name string) ExtOption
+
+type Config struct {
+    herald.Config
+    BasePath       string `yaml:"base_path"`
+    DisableRoutes  bool   `yaml:"disable_routes"`
+    DisableMigrate bool   `yaml:"disable_migrate"`
+    GroveDatabase  string `yaml:"grove_database"`
+    RequireConfig  bool
+}
+
+func DefaultConfig() Config
+```

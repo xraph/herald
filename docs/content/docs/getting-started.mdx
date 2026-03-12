@@ -1,0 +1,371 @@
+---
+title: Getting Started
+description: Install Herald and send your first notification in under five minutes.
+---
+
+This guide walks you through installing Herald, choosing a store backend, registering a provider, creating a template, and sending a notification. By the end you will have a working program that sends an email and records it in the delivery log.
+
+## Prerequisites
+
+- **Go 1.24+** (the module uses `go 1.25.7` but any recent version works)
+- A Go module (`go mod init`)
+
+## Install
+
+```bash
+go get github.com/xraph/herald
+```
+
+This pulls in the root module and all sub-packages (`provider`, `template`, `message`, `inbox`, `preference`, `scope`, `driver/*`, `store/*`, etc.).
+
+## Step 1 -- Create a store
+
+Every Herald operation needs a store backend. Start with the in-memory store for development and testing.
+
+```go
+import "github.com/xraph/herald/store/memory"
+
+store := memory.New()
+```
+
+The `memory.Store` implements the full `store.Store` composite interface -- providers, templates, messages, inbox, preferences, and scoped config -- all in-process with no external dependencies.
+
+For production use, choose one of the persistent backends:
+
+```go
+// PostgreSQL (via Grove ORM)
+import pgstore "github.com/xraph/herald/store/postgres"
+store := pgstore.New(db) // db is a *grove.DB with the pg driver
+
+// SQLite (via Grove ORM)
+import sqlitestore "github.com/xraph/herald/store/sqlite"
+store := sqlitestore.New(db) // db is a *grove.DB with the sqlite driver
+
+// MongoDB (via Grove ORM)
+import mongostore "github.com/xraph/herald/store/mongo"
+store := mongostore.New(db) // db is a *grove.DB with the mongo driver
+```
+
+All persistent stores require a migration step before first use:
+
+```go
+if err := store.Migrate(ctx); err != nil {
+    log.Fatal(err)
+}
+```
+
+## Step 2 -- Create the Herald engine
+
+The `herald.New` function accepts functional options to configure the engine. At minimum, you need a store and at least one driver.
+
+```go
+import (
+    "github.com/xraph/herald"
+    "github.com/xraph/herald/driver/email"
+    "github.com/xraph/herald/driver/sms"
+    "github.com/xraph/herald/driver/push"
+    "github.com/xraph/herald/driver/inapp"
+)
+
+h, err := herald.New(
+    herald.WithStore(store),
+    herald.WithDriver(&email.SMTPDriver{}),
+    herald.WithDriver(&email.ResendDriver{}),
+    herald.WithDriver(&sms.TwilioDriver{}),
+    herald.WithDriver(&push.FCMDriver{}),
+    herald.WithDriver(&inapp.Driver{}),
+    herald.WithDefaultLocale("en"),
+)
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+You only need to register drivers for the channels you plan to use. For example, if you only send email, register just the SMTP or Resend driver.
+
+### Available options
+
+| Option | Description |
+|--------|-------------|
+| `WithStore(s)` | Sets the persistence backend (required) |
+| `WithDriver(d)` | Registers a notification driver |
+| `WithLogger(l)` | Sets the structured logger (`*slog.Logger`) |
+| `WithDefaultLocale(l)` | Sets the default locale for template rendering (default: `"en"`) |
+| `WithMaxBatchSize(n)` | Sets the maximum recipients per batch send (default: `100`) |
+
+## Step 3 -- Register a provider
+
+A provider connects a channel to a driver with specific credentials. Create a provider in the store before sending notifications on that channel.
+
+```go
+import (
+    "github.com/xraph/herald/id"
+    "github.com/xraph/herald/provider"
+)
+
+err = store.CreateProvider(ctx, &provider.Provider{
+    ID:      id.NewProviderID(),
+    AppID:   "myapp",
+    Name:    "Resend Production",
+    Channel: "email",
+    Driver:  "resend",
+    Credentials: map[string]string{
+        "api_key": "re_your_api_key",
+    },
+    Settings: map[string]string{
+        "from":      "notifications@example.com",
+        "from_name": "My App",
+    },
+    Priority: 1,
+    Enabled:  true,
+})
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+Each provider is scoped to an `AppID` and handles a single channel type. You can register multiple providers for the same channel -- the scope resolver picks the highest-priority enabled provider.
+
+### Provider credentials by driver
+
+| Driver | Required credentials |
+|--------|---------------------|
+| `smtp` | `host`, `port`, `username` (optional), `password` (optional), `use_tls` (optional) |
+| `resend` | `api_key` |
+| `twilio` | `account_sid`, `auth_token`, `from_number` |
+| `fcm` | `server_key` or `access_token`, plus `project_id` |
+| `inapp` | None (in-app notifications are stored directly in the inbox) |
+
+## Step 4 -- Create a template
+
+Templates define the content structure for notifications. Each template has a slug, a channel, typed variables, and one or more locale-specific versions.
+
+```go
+import "github.com/xraph/herald/template"
+
+tmpl := &template.Template{
+    ID:       id.NewTemplateID(),
+    AppID:    "myapp",
+    Slug:     "order.confirmation",
+    Name:     "Order Confirmation",
+    Channel:  "email",
+    Category: "transactional",
+    Variables: []template.Variable{
+        {Name: "user_name", Type: "string", Required: true, Description: "Customer name"},
+        {Name: "order_id", Type: "string", Required: true, Description: "Order identifier"},
+        {Name: "total", Type: "string", Required: false, Default: "$0.00"},
+    },
+    Enabled: true,
+}
+
+err = store.CreateTemplate(ctx, tmpl)
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+Then add a version with the actual content. Templates use standard Go template syntax.
+
+```go
+err = store.CreateVersion(ctx, &template.Version{
+    ID:         id.NewTemplateVersionID(),
+    TemplateID: tmpl.ID,
+    Locale:     "en",
+    Subject:    "Your order {{.order_id}} is confirmed!",
+    HTML:       `<h1>Thanks, {{.user_name}}!</h1><p>Order <strong>{{.order_id}}</strong> confirmed. Total: {{.total}}</p>`,
+    Text:       "Thanks, {{.user_name}}! Order {{.order_id}} confirmed. Total: {{.total}}",
+    Active:     true,
+})
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+Add additional versions for other locales:
+
+```go
+err = store.CreateVersion(ctx, &template.Version{
+    ID:         id.NewTemplateVersionID(),
+    TemplateID: tmpl.ID,
+    Locale:     "es",
+    Subject:    "Tu pedido {{.order_id}} esta confirmado",
+    Text:       "Gracias, {{.user_name}}! Pedido {{.order_id}} confirmado. Total: {{.total}}",
+    Active:     true,
+})
+```
+
+The renderer resolves locale versions in this order: exact match (`es-MX`), language prefix (`es`), default version (empty locale string).
+
+### Built-in template functions
+
+The template renderer provides these helper functions:
+
+| Function | Example | Description |
+|----------|---------|-------------|
+| `upper` | `{{upper .name}}` | Converts to uppercase |
+| `lower` | `{{lower .name}}` | Converts to lowercase |
+| `title` | `{{title .name}}` | Converts to title case |
+| `truncate` | `{{truncate .body 100}}` | Truncates to N characters with ellipsis |
+| `default` | `{{default "N/A" .value}}` | Returns default if value is nil or empty |
+| `now` | `{{now}}` | Returns current UTC time in RFC3339 |
+| `formatDate` | `{{formatDate .date "Jan 2, 2006"}}` | Formats a `time.Time` value |
+
+## Step 5 -- Send a notification
+
+Use `engine.Send()` to deliver on a single channel:
+
+```go
+result, err := h.Send(ctx, &herald.SendRequest{
+    AppID:    "myapp",
+    Channel:  "email",
+    Template: "order.confirmation",
+    To:       []string{"alice@example.com"},
+    Data: map[string]any{
+        "user_name": "Alice",
+        "order_id":  "ORD-42",
+        "total":     "$99.00",
+    },
+})
+if err != nil {
+    log.Fatal(err)
+}
+
+fmt.Printf("message_id=%s status=%s\n", result.MessageID, result.Status)
+// Output: message_id=hmsg_01h... status=sent
+```
+
+Use `engine.Notify()` to deliver across multiple channels with a single call:
+
+```go
+results, err := h.Notify(ctx, &herald.NotifyRequest{
+    AppID:    "myapp",
+    Template: "order.confirmation",
+    Channels: []string{"email", "inapp"},
+    To:       []string{"alice@example.com"},
+    UserID:   "user-42",
+    Data: map[string]any{
+        "user_name": "Alice",
+        "order_id":  "ORD-42",
+    },
+})
+if err != nil {
+    log.Fatal(err)
+}
+
+for _, r := range results {
+    fmt.Printf("channel result: message_id=%s status=%s\n", r.MessageID, r.Status)
+}
+```
+
+The `Notify` call iterates over each channel, resolves the provider and template for that channel, and delivers independently. A failure on one channel does not block the others.
+
+### Sending without a template
+
+You can send raw content without a template by providing `Subject` and `Body` directly:
+
+```go
+result, err := h.Send(ctx, &herald.SendRequest{
+    AppID:   "myapp",
+    Channel: "email",
+    To:      []string{"alice@example.com"},
+    Subject: "Quick update",
+    Body:    "This is a plain text message without a template.",
+})
+```
+
+## Step 6 -- Seed default templates
+
+Herald ships with built-in templates for common auth flows (welcome, email verification, password reset, MFA codes, invitations, and more). Seed them for your app in one call:
+
+```go
+err = h.SeedDefaultTemplates(ctx, "myapp")
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+This creates templates across email, SMS, and in-app channels with English locale versions. Existing templates are not overwritten.
+
+## Step 7 -- Switch to a persistent store
+
+When you are ready for production, swap the memory store for PostgreSQL. The API does not change.
+
+```go
+import (
+    "github.com/xraph/grove"
+    pgdriver "github.com/xraph/grove/drivers/pgdriver"
+    pgstore "github.com/xraph/herald/store/postgres"
+)
+
+// Connect via Grove ORM.
+db, err := grove.Open(pgdriver.Open("postgres://user:pass@localhost:5432/mydb"))
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+// Create the store and run migrations.
+store := pgstore.New(db)
+if err := store.Migrate(ctx); err != nil {
+    log.Fatal(err)
+}
+
+// Use store everywhere you previously used memory.New().
+h, err := herald.New(
+    herald.WithStore(store),
+    herald.WithDriver(&email.ResendDriver{}),
+)
+```
+
+## Step 8 -- Integrate with Forge (optional)
+
+If your application uses the Forge framework, Herald ships with a ready-made extension that handles store resolution, migrations, route registration, and DI container binding.
+
+```go
+import (
+    "github.com/xraph/forge"
+    heraldext "github.com/xraph/herald/extension"
+)
+
+app := forge.New()
+
+// Register Herald as a Forge extension.
+// It auto-resolves the Grove database from the DI container.
+app.Register(heraldext.New(
+    heraldext.WithGroveDatabase(""),      // use the default grove.DB
+    heraldext.WithBasePath("/herald"),     // API routes at /herald/*
+))
+
+app.Start()
+```
+
+The extension registers all Herald API routes under the base path:
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /herald/send` | Send a single-channel notification |
+| `POST /herald/notify` | Multi-channel notify |
+| `GET/POST/PUT/DELETE /herald/providers/*` | Provider CRUD |
+| `GET/POST/PUT/DELETE /herald/templates/*` | Template and version CRUD |
+| `GET /herald/messages/*` | Delivery log queries |
+| `GET /herald/inbox/*` | In-app inbox operations |
+| `GET/PUT /herald/preferences` | User preference management |
+| `GET/PUT/DELETE /herald/config/*` | Scoped configuration |
+
+YAML configuration is also supported under the `extensions.herald` or `herald` key:
+
+```yaml
+extensions:
+  herald:
+    base_path: /herald
+    default_locale: en
+    max_batch_size: 100
+    grove_database: primary
+```
+
+## Next steps
+
+- [Architecture](/docs/architecture) -- Understand the package dependency graph, delivery pipeline, and scope resolution chain.
+- [Concepts](/docs/concepts) -- Learn about Providers, Templates, Messages, Inbox, Preferences, and Scoped Config.
+- [Stores](/docs/stores) -- Configure PostgreSQL, SQLite, MongoDB, or Memory store backends.
+- [Guides](/docs/guides) -- Practical walkthroughs for common notification patterns.

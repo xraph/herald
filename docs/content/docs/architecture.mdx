@@ -1,0 +1,365 @@
+---
+title: Architecture
+description: How Herald's packages fit together and how the delivery pipeline works.
+---
+
+Herald is organized as a set of focused Go packages. The root `herald` package defines the engine, request/result types, channel constants, and sentinel errors. Six entity packages define the domain types and store interfaces. The `driver` package provides the transport abstraction. The `store` package composes all sub-interfaces into a single composite. Four store backends implement that composite. The `extension` and `api` packages integrate Herald with the Forge framework.
+
+## Package diagram
+
+```
+┌───────────────────────────────────────────────────────────────────────────┐
+│                           herald (engine)                                 │
+│                                                                           │
+│  Herald struct        Send(SendRequest)        Notify(NotifyRequest)     │
+│  Config               SendResult               SeedDefaultTemplates      │
+│  ChannelType          Option funcs             Health / Start / Stop     │
+├───────────────────────────────────────────────────────────────────────────┤
+│                         Entity packages                                   │
+│                                                                           │
+│  provider   Provider entity + Store interface     (hpvd_ IDs)            │
+│  template   Template + Version + Variable         (htpl_ / htpv_ IDs)   │
+│  message    Message entity + delivery log         (hmsg_ IDs)            │
+│  inbox      Notification entity (in-app)          (hinb_ IDs)            │
+│  preference Preference + ChannelPreference        (hprf_ IDs)            │
+│  scope      Config + ScopeType + Resolver         (hscf_ IDs)            │
+├─────────────────────────────┬─────────────────────────────────────────────┤
+│    Supporting packages      │    Integration packages                     │
+│                             │                                             │
+│  id       (TypeID)          │  api       (ForgeAPI + HTTP handlers)       │
+│  driver   (Driver iface)    │  extension (Forge extension lifecycle)      │
+│  template (Renderer)        │                                             │
+├─────────────────────────────┴─────────────────────────────────────────────┤
+│                            store.Store                                    │
+│  (composite: provider.Store + template.Store + message.Store +           │
+│   inbox.Store + preference.Store + scope.Store +                         │
+│   Migrate / Ping / Close)                                                │
+├──────────────┬──────────────┬──────────────┬──────────────────────────────┤
+│ store/memory │ store/postgres│ store/sqlite │ store/mongo                 │
+│ (in-process) │ (Grove + pg)  │ (Grove + sql)│ (Grove + mongo)            │
+└──────────────┴──────────────┴──────────────┴──────────────────────────────┘
+```
+
+## Delivery pipeline
+
+When `Herald.Send()` is called, the notification passes through a well-defined pipeline. Each stage has a clear responsibility and a defined failure mode.
+
+```
+SendRequest
+    │
+    ▼
+┌──────────────────────┐
+│ 1. Check preferences │  Does the user want this notification?
+│    (opt-out check)   │  If opted out → return early with "user opted out"
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│ 2. Resolve template  │  Look up template by slug + app + channel
+│    + render content  │  Find locale version (exact → language → default)
+│                      │  Validate required variables
+│                      │  Render subject, HTML, text, title via Go templates
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│ 3. Resolve provider  │  Walk scope chain: user → org → app → fallback
+│    (scope resolver)  │  Select highest-priority enabled provider
+│                      │  Extract credentials and sender identity
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│ 4. Get driver        │  Look up the driver registered for provider.Driver
+│                      │  (e.g., "resend" → ResendDriver)
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│ 5. Build outbound    │  Merge provider credentials + settings into Data
+│    message           │  Set From/FromName from scoped config or provider
+│                      │  Construct driver.OutboundMessage
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│ 6. Record message    │  Create message.Message with status=sending
+│    (delivery log)    │  Persist to store before attempting delivery
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│ 7. Driver dispatch   │  Call driver.Send(ctx, outbound)
+│                      │  On success → update status to sent
+│                      │  On failure → update status to failed + error
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│ 8. Inbox storage     │  If channel == "inapp" and UserID is set:
+│    (in-app only)     │  Create inbox.Notification for the user
+└──────────┬───────────┘
+           │
+           ▼
+      SendResult
+  (MessageID, Status, ProviderID)
+```
+
+### Multi-channel delivery (Notify)
+
+The `Herald.Notify()` method iterates over the requested channels and calls `Send()` for each one independently. A failure on one channel does not block the others. Each channel gets its own template resolution (since templates are channel-specific), its own provider resolution, and its own message log entry.
+
+```go
+// Notify iterates over channels and delegates to Send.
+for _, ch := range req.Channels {
+    result, err := h.Send(ctx, &SendRequest{
+        Channel:  ch,
+        Template: req.Template,
+        // ... other fields from NotifyRequest
+    })
+    results = append(results, result)
+}
+```
+
+## Driver interface
+
+Every notification transport implements the `driver.Driver` interface:
+
+```go
+type Driver interface {
+    Name() string                                                    // e.g., "smtp", "resend", "twilio", "fcm", "inapp"
+    Channel() string                                                 // e.g., "email", "sms", "push", "inapp"
+    Send(ctx context.Context, msg *OutboundMessage) (*DeliveryResult, error)
+    Validate(credentials, settings map[string]string) error
+}
+```
+
+The `OutboundMessage` is a normalized message format that all drivers consume:
+
+```go
+type OutboundMessage struct {
+    To       string            // recipient address/token
+    From     string            // sender address (email, phone)
+    FromName string            // sender display name
+    Subject  string            // email subject or push title
+    HTML     string            // HTML body (email)
+    Text     string            // plain text body
+    Title    string            // push notification title
+    Data     map[string]string // provider credentials + settings
+}
+```
+
+Drivers receive provider credentials and settings through the `Data` map. This keeps the driver interface stateless -- the same driver instance can send on behalf of different providers in the same process.
+
+### Built-in drivers
+
+| Driver | Package | Channel | Transport |
+|--------|---------|---------|-----------|
+| `smtp` | `driver/email` | `email` | Standard SMTP with optional TLS |
+| `resend` | `driver/email` | `email` | Resend HTTP API (`api.resend.com`) |
+| `twilio` | `driver/sms` | `sms` | Twilio REST API |
+| `fcm` | `driver/push` | `push` | Firebase Cloud Messaging HTTP v1 |
+| `inapp` | `driver/inapp` | `inapp` | No-op (inbox storage handled by engine) |
+
+## Store composition
+
+Herald follows the same composite store pattern used across the Forgery ecosystem. Each entity package defines its own store interface. The root `store.Store` interface composes them all:
+
+```go
+// store.Store is the aggregate persistence interface.
+type Store interface {
+    provider.Store    // CRUD for providers
+    template.Store    // CRUD for templates + versions
+    message.Store     // Delivery log
+    inbox.Store       // In-app notifications
+    preference.Store  // User preferences
+    scope.Store       // Scoped config overrides
+
+    Migrate(ctx context.Context) error
+    Ping(ctx context.Context) error
+    Close() error
+}
+```
+
+### Sub-interfaces
+
+**provider.Store** -- Create, get, update, delete, and list providers by app and channel.
+
+```go
+type Store interface {
+    CreateProvider(ctx context.Context, p *Provider) error
+    GetProvider(ctx context.Context, providerID id.ProviderID) (*Provider, error)
+    UpdateProvider(ctx context.Context, p *Provider) error
+    DeleteProvider(ctx context.Context, providerID id.ProviderID) error
+    ListProviders(ctx context.Context, appID string, channel string) ([]*Provider, error)
+    ListAllProviders(ctx context.Context, appID string) ([]*Provider, error)
+}
+```
+
+**template.Store** -- Template CRUD plus version CRUD. Templates are looked up by ID or by slug+app+channel.
+
+```go
+type Store interface {
+    CreateTemplate(ctx context.Context, t *Template) error
+    GetTemplate(ctx context.Context, templateID id.TemplateID) (*Template, error)
+    GetTemplateBySlug(ctx context.Context, appID, slug, channel string) (*Template, error)
+    UpdateTemplate(ctx context.Context, t *Template) error
+    DeleteTemplate(ctx context.Context, templateID id.TemplateID) error
+    ListTemplates(ctx context.Context, appID string) ([]*Template, error)
+    ListTemplatesByChannel(ctx context.Context, appID, channel string) ([]*Template, error)
+    CreateVersion(ctx context.Context, v *Version) error
+    GetVersion(ctx context.Context, versionID id.TemplateVersionID) (*Version, error)
+    UpdateVersion(ctx context.Context, v *Version) error
+    DeleteVersion(ctx context.Context, versionID id.TemplateVersionID) error
+    ListVersions(ctx context.Context, templateID id.TemplateID) ([]*Version, error)
+}
+```
+
+**message.Store** -- Append-only delivery log with status updates.
+
+**inbox.Store** -- In-app notification CRUD with read tracking and unread counts.
+
+**preference.Store** -- Per-user, per-app notification preference management.
+
+**scope.Store** -- Scoped configuration CRUD for app/org/user overrides.
+
+## Scope resolution chain
+
+The `scope.Resolver` determines which provider and sender identity to use for a given notification. It walks a hierarchical chain from most-specific to least-specific:
+
+```
+┌─────────────┐
+│  1. User    │  scope.ScopeUser -- per-user provider override
+│  scope_id = │  Checked if userID is provided
+│  userID     │
+└──────┬──────┘
+       │ not found
+       ▼
+┌─────────────┐
+│  2. Org     │  scope.ScopeOrg -- per-organization provider override
+│  scope_id = │  Checked if orgID is provided
+│  orgID      │
+└──────┬──────┘
+       │ not found
+       ▼
+┌─────────────┐
+│  3. App     │  scope.ScopeApp -- app-level default provider
+│  scope_id = │  Always checked
+│  appID      │
+└──────┬──────┘
+       │ not found
+       ▼
+┌─────────────┐
+│  4. Default │  Fallback: first enabled provider for the channel,
+│  (fallback) │  sorted by priority (lower number = higher priority)
+└─────────────┘
+```
+
+At each level, the resolver reads the `scope.Config` for that scope, extracts the provider ID for the requested channel, and looks up the provider. If the provider exists and is enabled, it returns a `ResolveResult` containing both the provider and the scoped config (which carries sender identity overrides like `FromEmail`, `FromName`, `FromPhone`).
+
+### Scoped config entity
+
+Each `scope.Config` can override:
+
+| Field | Description |
+|-------|-------------|
+| `EmailProviderID` | Override the email provider for this scope |
+| `SMSProviderID` | Override the SMS provider for this scope |
+| `PushProviderID` | Override the push provider for this scope |
+| `FromEmail` | Override the sender email address |
+| `FromName` | Override the sender display name |
+| `FromPhone` | Override the sender phone number |
+| `DefaultLocale` | Override the default locale for template rendering |
+
+This enables powerful multi-tenant patterns. For example, an organization can use its own SMTP server with its own branding, while the app-level default uses Resend.
+
+## Template rendering
+
+The `template.Renderer` processes Go templates (`text/template` for plain text, `html/template` for HTML with auto-escaping) with the following logic:
+
+1. **Find version** -- Match the requested locale against available versions: exact match, language prefix match (e.g., `en` from `en-US`), then default (empty locale).
+2. **Validate variables** -- Check that all required variables (without defaults) are present in the data map.
+3. **Render fields** -- Render `Subject`, `HTML`, `Text`, and `Title` independently. Each field supports the full Go template syntax plus built-in helper functions.
+
+The renderer is stateless and thread-safe. It is created once during engine initialization and shared across all send operations.
+
+## TypeID system
+
+Herald uses TypeID-based identifiers for all entities. Each ID is a K-sortable, globally unique, URL-safe string in the format `prefix_suffix` where the suffix is a base32-encoded UUIDv7.
+
+| Prefix | Entity | Constructor | Parser |
+|--------|--------|-------------|--------|
+| `hpvd` | Provider | `id.NewProviderID()` | `id.ParseProviderID(s)` |
+| `htpl` | Template | `id.NewTemplateID()` | `id.ParseTemplateID(s)` |
+| `htpv` | Template Version | `id.NewTemplateVersionID()` | `id.ParseTemplateVersionID(s)` |
+| `hmsg` | Message | `id.NewMessageID()` | `id.ParseMessageID(s)` |
+| `hinb` | Inbox Notification | `id.NewInboxID()` | `id.ParseInboxID(s)` |
+| `hprf` | Preference | `id.NewPreferenceID()` | `id.ParsePreferenceID(s)` |
+| `hscf` | Scoped Config | `id.NewScopedConfigID()` | `id.ParseScopedConfigID(s)` |
+
+IDs implement `encoding.TextMarshaler`, `encoding.TextUnmarshaler`, `sql.Scanner`, `driver.Valuer`, and BSON marshaling for seamless integration with JSON, SQL databases, and MongoDB.
+
+## Forge extension integration
+
+The `extension.Extension` adapts Herald as a Forge extension, implementing the full `forge.Extension` lifecycle:
+
+```
+┌─────────────────────┐
+│  1. Register        │  Load YAML config, resolve Grove DB from DI container,
+│                     │  construct store, create Herald engine, register drivers,
+│                     │  run migrations, mount API routes, provide Herald to DI
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│  2. Start           │  Mark extension as started (no-op for Herald currently)
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│  3. Health          │  Delegate to store.Ping() for database connectivity check
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│  4. Stop            │  Mark extension as stopped (graceful shutdown)
+└─────────────────────┘
+```
+
+The extension auto-detects the Grove driver type (`pg`, `sqlite`, `mongo`) and constructs the appropriate store backend. It also registers all five built-in drivers automatically.
+
+### DI container integration
+
+After registration, the Herald instance is available from the Forge DI container:
+
+```go
+import "github.com/xraph/vessel"
+
+// Inject Herald from the container.
+h, err := vessel.Inject[*herald.Herald](app.Container())
+```
+
+## Package index
+
+| Package | Import path | Purpose |
+|---------|-------------|---------|
+| `herald` | `github.com/xraph/herald` | Root -- engine, `SendRequest`, `NotifyRequest`, `SendResult`, channels, errors |
+| `id` | `github.com/xraph/herald/id` | TypeID-based entity identifiers with 7 prefixes |
+| `provider` | `github.com/xraph/herald/provider` | Provider entity and store interface |
+| `template` | `github.com/xraph/herald/template` | Template + Version entities, store interface, renderer, defaults |
+| `message` | `github.com/xraph/herald/message` | Message entity (delivery log) and store interface |
+| `inbox` | `github.com/xraph/herald/inbox` | In-app notification entity and store interface |
+| `preference` | `github.com/xraph/herald/preference` | User preference entity and store interface |
+| `scope` | `github.com/xraph/herald/scope` | Scoped config entity, resolver, and store interface |
+| `driver` | `github.com/xraph/herald/driver` | Driver interface, `OutboundMessage`, `DeliveryResult`, registry |
+| `driver/email` | `github.com/xraph/herald/driver/email` | SMTP and Resend email drivers |
+| `driver/sms` | `github.com/xraph/herald/driver/sms` | Twilio SMS driver |
+| `driver/push` | `github.com/xraph/herald/driver/push` | FCM push notification driver |
+| `driver/inapp` | `github.com/xraph/herald/driver/inapp` | In-app no-op driver |
+| `store` | `github.com/xraph/herald/store` | Composite `Store` interface definition |
+| `store/memory` | `github.com/xraph/herald/store/memory` | In-memory store (testing and development) |
+| `store/postgres` | `github.com/xraph/herald/store/postgres` | PostgreSQL store (Grove ORM) |
+| `store/sqlite` | `github.com/xraph/herald/store/sqlite` | SQLite store (Grove ORM) |
+| `store/mongo` | `github.com/xraph/herald/store/mongo` | MongoDB store (Grove ORM) |
+| `api` | `github.com/xraph/herald/api` | Forge HTTP API handlers and route registration |
+| `extension` | `github.com/xraph/herald/extension` | Forge extension lifecycle adapter |

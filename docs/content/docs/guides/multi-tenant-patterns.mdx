@@ -1,0 +1,440 @@
+---
+title: Multi-Tenant Patterns
+description: Per-org email providers, per-user locale preferences, and scope resolution patterns.
+---
+
+Herald is designed for multi-tenant applications from the ground up. Every entity is scoped by `appID`, and scoped configurations support app, organization, and user-level overrides. This guide covers the key patterns for multi-tenant notification delivery.
+
+## Scope Resolution Chain
+
+Herald resolves the notification provider for each send operation through a four-level fallback chain:
+
+```
+user scope → org scope → app scope → first enabled provider
+```
+
+The scope resolver (`scope.Resolver`) checks each level in order and returns the first match. This allows fine-grained provider overrides without affecting other tenants.
+
+```go
+func (r *Resolver) ResolveProvider(
+    ctx context.Context,
+    appID, orgID, userID string,
+    channel string,
+) (*ResolveResult, error) {
+    // 1. User-scoped override
+    if userID != "" {
+        if result := r.tryScope(ctx, appID, ScopeUser, userID, channel); result != nil {
+            return result, nil
+        }
+    }
+    // 2. Org-scoped override
+    if orgID != "" {
+        if result := r.tryScope(ctx, appID, ScopeOrg, orgID, channel); result != nil {
+            return result, nil
+        }
+    }
+    // 3. App-scoped default
+    if result := r.tryScope(ctx, appID, ScopeApp, appID, channel); result != nil {
+        return result, nil
+    }
+    // 4. Fallback: first enabled provider by priority
+    // ...
+}
+```
+
+The resolved result includes both the provider and the scoped configuration, so sender fields (`from_email`, `from_name`, `from_phone`, `default_locale`) are automatically applied.
+
+## Per-Organization Email Provider
+
+A common requirement is letting each organization use its own email provider (for example, a whitelabel SaaS product where each org sends from their own domain).
+
+### Step 1: Create providers for each org
+
+```go
+// Acme Corp uses Amazon SES.
+acmeProvider := &provider.Provider{
+    ID:      id.NewProviderID(),
+    AppID:   "myapp",
+    Name:    "Acme SES",
+    Channel: "email",
+    Driver:  "smtp",
+    Credentials: map[string]string{
+        "host":     "email-smtp.us-east-1.amazonaws.com",
+        "port":     "587",
+        "username": "AKIA...",
+        "password": "...",
+    },
+    Settings: map[string]string{
+        "from": "noreply@acme.com",
+    },
+    Enabled:   true,
+    CreatedAt: now,
+    UpdatedAt: now,
+}
+_ = store.CreateProvider(ctx, acmeProvider)
+
+// Globex uses Resend.
+globexProvider := &provider.Provider{
+    ID:      id.NewProviderID(),
+    AppID:   "myapp",
+    Name:    "Globex Resend",
+    Channel: "email",
+    Driver:  "resend",
+    Credentials: map[string]string{
+        "api_key": "re_...",
+    },
+    Settings: map[string]string{
+        "from": "noreply@globex.io",
+    },
+    Enabled:   true,
+    CreatedAt: now,
+    UpdatedAt: now,
+}
+_ = store.CreateProvider(ctx, globexProvider)
+```
+
+### Step 2: Set org-scoped configuration
+
+```go
+// Link Acme Corp to their SES provider.
+_ = store.SetScopedConfig(ctx, &scope.Config{
+    ID:              id.NewScopedConfigID(),
+    AppID:           "myapp",
+    Scope:           scope.ScopeOrg,
+    ScopeID:         "org-acme",
+    EmailProviderID: acmeProvider.ID.String(),
+    FromEmail:       "noreply@acme.com",
+    FromName:        "Acme Corp",
+    CreatedAt:       now,
+    UpdatedAt:       now,
+})
+
+// Link Globex to their Resend provider.
+_ = store.SetScopedConfig(ctx, &scope.Config{
+    ID:              id.NewScopedConfigID(),
+    AppID:           "myapp",
+    Scope:           scope.ScopeOrg,
+    ScopeID:         "org-globex",
+    EmailProviderID: globexProvider.ID.String(),
+    FromEmail:       "noreply@globex.io",
+    FromName:        "Globex Inc",
+    CreatedAt:       now,
+    UpdatedAt:       now,
+})
+```
+
+### Step 3: Send with org context
+
+When sending, include the `OrgID` in the request. The scope resolver automatically picks the correct provider:
+
+```go
+// This sends via Acme's SES provider, from noreply@acme.com.
+result, err := h.Send(ctx, &herald.SendRequest{
+    AppID:    "myapp",
+    OrgID:    "org-acme",
+    Channel:  "email",
+    Template: "welcome",
+    To:       []string{"alice@acme.com"},
+    Data:     map[string]any{"name": "Alice"},
+})
+
+// This sends via Globex's Resend provider, from noreply@globex.io.
+result, err = h.Send(ctx, &herald.SendRequest{
+    AppID:    "myapp",
+    OrgID:    "org-globex",
+    Channel:  "email",
+    Template: "welcome",
+    To:       []string{"bob@globex.io"},
+    Data:     map[string]any{"name": "Bob"},
+})
+```
+
+### Via HTTP API
+
+```bash
+curl -X POST http://localhost:8080/herald/send \
+  -H "Content-Type: application/json" \
+  -d '{
+    "app_id": "myapp",
+    "org_id": "org-acme",
+    "channel": "email",
+    "template": "welcome",
+    "to": ["alice@acme.com"],
+    "data": {"name": "Alice"}
+  }'
+```
+
+## Per-User Locale Preferences
+
+Herald supports locale-specific template versions. The locale can be resolved through the scoped configuration chain or specified explicitly on the send request.
+
+### Step 1: Create templates with multiple locale versions
+
+```go
+tmpl := &template.Template{
+    ID:      id.NewTemplateID(),
+    AppID:   "myapp",
+    Slug:    "invoice",
+    Name:    "Invoice Notification",
+    Channel: "email",
+    Enabled: true,
+}
+_ = store.CreateTemplate(ctx, tmpl)
+
+// English version
+_ = store.CreateVersion(ctx, &template.Version{
+    ID:         id.NewTemplateVersionID(),
+    TemplateID: tmpl.ID,
+    Locale:     "en",
+    Subject:    "Invoice #{{.invoice_id}}",
+    HTML:       "<p>Dear {{.name}}, your invoice is ready.</p>",
+    Text:       "Dear {{.name}}, your invoice is ready.",
+    Active:     true,
+})
+
+// French version
+_ = store.CreateVersion(ctx, &template.Version{
+    ID:         id.NewTemplateVersionID(),
+    TemplateID: tmpl.ID,
+    Locale:     "fr",
+    Subject:    "Facture #{{.invoice_id}}",
+    HTML:       "<p>Cher(e) {{.name}}, votre facture est prête.</p>",
+    Text:       "Cher(e) {{.name}}, votre facture est prête.",
+    Active:     true,
+})
+
+// Japanese version
+_ = store.CreateVersion(ctx, &template.Version{
+    ID:         id.NewTemplateVersionID(),
+    TemplateID: tmpl.ID,
+    Locale:     "ja",
+    Subject:    "請求書 #{{.invoice_id}}",
+    HTML:       "<p>{{.name}} 様、請求書の準備ができました。</p>",
+    Text:       "{{.name}} 様、請求書の準備ができました。",
+    Active:     true,
+})
+```
+
+### Step 2: Set user-level locale via scoped config
+
+```go
+// French-speaking user
+_ = store.SetScopedConfig(ctx, &scope.Config{
+    ID:            id.NewScopedConfigID(),
+    AppID:         "myapp",
+    Scope:         scope.ScopeUser,
+    ScopeID:       "user-jean",
+    DefaultLocale: "fr",
+    CreatedAt:     now,
+    UpdatedAt:     now,
+})
+
+// Japanese-speaking user
+_ = store.SetScopedConfig(ctx, &scope.Config{
+    ID:            id.NewScopedConfigID(),
+    AppID:         "myapp",
+    Scope:         scope.ScopeUser,
+    ScopeID:       "user-yuki",
+    DefaultLocale: "ja",
+    CreatedAt:     now,
+    UpdatedAt:     now,
+})
+```
+
+### Step 3: Send with explicit locale or let scope resolve it
+
+```go
+// Explicit locale on the request.
+result, _ := h.Send(ctx, &herald.SendRequest{
+    AppID:    "myapp",
+    Channel:  "email",
+    Template: "invoice",
+    Locale:   "fr",
+    To:       []string{"jean@example.fr"},
+    Data:     map[string]any{"name": "Jean", "invoice_id": "INV-001"},
+})
+
+// If Locale is empty, Herald falls back to the config default_locale ("en").
+result, _ = h.Send(ctx, &herald.SendRequest{
+    AppID:    "myapp",
+    Channel:  "email",
+    Template: "invoice",
+    To:       []string{"alice@example.com"},
+    Data:     map[string]any{"name": "Alice", "invoice_id": "INV-002"},
+})
+```
+
+## Per-User Notification Preferences
+
+Users can opt in or out of specific notification types per channel using the preference system.
+
+### Setting preferences
+
+```go
+// Bob opts out of marketing emails but keeps transactional and push.
+_ = store.SetPreference(ctx, &preference.Preference{
+    ID:     id.NewPreferenceID(),
+    AppID:  "myapp",
+    UserID: "user-bob",
+    Overrides: map[string]preference.ChannelPreference{
+        "marketing-weekly": {
+            Email: boolPtr(false),
+            Push:  boolPtr(true),
+        },
+        "product-updates": {
+            Email: boolPtr(false),
+            Push:  boolPtr(false),
+        },
+    },
+    UpdatedAt: now,
+})
+```
+
+### How preferences affect delivery
+
+When `Send` is called with a `UserID` and `Template`, Herald checks the user's preferences before sending:
+
+```go
+// This is skipped because Bob opted out of marketing-weekly emails.
+result, _ := h.Send(ctx, &herald.SendRequest{
+    AppID:    "myapp",
+    UserID:   "user-bob",
+    Channel:  "email",
+    Template: "marketing-weekly",
+    To:       []string{"bob@example.com"},
+    Data:     map[string]any{"name": "Bob"},
+})
+// result.Error = "user opted out"
+
+// This still sends because Bob has push enabled for marketing-weekly.
+result, _ = h.Send(ctx, &herald.SendRequest{
+    AppID:    "myapp",
+    UserID:   "user-bob",
+    Channel:  "push",
+    Template: "marketing-weekly",
+    To:       []string{"bob-device-token"},
+    Data:     map[string]any{"name": "Bob"},
+})
+```
+
+### Preference management via HTTP API
+
+```bash
+# Get preferences
+curl "http://localhost:8080/herald/preferences?app_id=myapp&user_id=user-bob"
+
+# Update preferences
+curl -X PUT http://localhost:8080/herald/preferences \
+  -H "Content-Type: application/json" \
+  -d '{
+    "app_id": "myapp",
+    "user_id": "user-bob",
+    "overrides": {
+      "marketing-weekly": {
+        "email": false,
+        "push": true
+      }
+    }
+  }'
+```
+
+## Scope Override Hierarchy Example
+
+This example demonstrates all three scope levels working together:
+
+```go
+// App-level: default SMTP provider.
+_ = store.SetScopedConfig(ctx, &scope.Config{
+    ID:              id.NewScopedConfigID(),
+    AppID:           "myapp",
+    Scope:           scope.ScopeApp,
+    ScopeID:         "myapp",
+    EmailProviderID: defaultSMTP.ID.String(),
+    FromEmail:       "noreply@myapp.com",
+    DefaultLocale:   "en",
+    CreatedAt:       now,
+    UpdatedAt:       now,
+})
+
+// Org-level: Acme uses their own SES.
+_ = store.SetScopedConfig(ctx, &scope.Config{
+    ID:              id.NewScopedConfigID(),
+    AppID:           "myapp",
+    Scope:           scope.ScopeOrg,
+    ScopeID:         "org-acme",
+    EmailProviderID: acmeSES.ID.String(),
+    FromEmail:       "noreply@acme.com",
+    FromName:        "Acme",
+    CreatedAt:       now,
+    UpdatedAt:       now,
+})
+
+// User-level: Acme's CEO uses a personal sender name.
+_ = store.SetScopedConfig(ctx, &scope.Config{
+    ID:        id.NewScopedConfigID(),
+    AppID:     "myapp",
+    Scope:     scope.ScopeUser,
+    ScopeID:   "user-ceo-acme",
+    FromName:  "John from Acme",
+    FromEmail: "john@acme.com",
+    CreatedAt: now,
+    UpdatedAt: now,
+})
+```
+
+Resolution results:
+
+| Request context | Resolved provider | From email | From name |
+|----------------|-------------------|-----------|-----------|
+| No org, no user | Default SMTP | `noreply@myapp.com` | (default) |
+| `org_id: org-acme` | Acme SES | `noreply@acme.com` | Acme |
+| `org_id: org-acme, user_id: user-ceo-acme` | (from user config, or falls back to org) | `john@acme.com` | John from Acme |
+
+## Scoped Config via HTTP API
+
+```bash
+# Set app-level config
+curl -X PUT http://localhost:8080/herald/config/app \
+  -H "Content-Type: application/json" \
+  -d '{
+    "app_id": "myapp",
+    "email_provider_id": "hpvd_...",
+    "from_email": "noreply@myapp.com",
+    "default_locale": "en"
+  }'
+
+# Set org-level config
+curl -X PUT http://localhost:8080/herald/config/org/org-acme \
+  -H "Content-Type: application/json" \
+  -d '{
+    "app_id": "myapp",
+    "email_provider_id": "hpvd_...",
+    "from_email": "noreply@acme.com",
+    "from_name": "Acme Corp"
+  }'
+
+# Set user-level config
+curl -X PUT http://localhost:8080/herald/config/user/user-ceo-acme \
+  -H "Content-Type: application/json" \
+  -d '{
+    "app_id": "myapp",
+    "from_email": "john@acme.com",
+    "from_name": "John from Acme"
+  }'
+
+# List all configs for an app
+curl "http://localhost:8080/herald/config?app_id=myapp"
+
+# Delete an org config
+curl -X DELETE "http://localhost:8080/herald/config/org/org-acme?app_id=myapp"
+```
+
+## Pattern Summary
+
+| Pattern | Entity | Key field | Purpose |
+|---------|--------|-----------|---------|
+| Per-org provider | `scope.Config` | `ScopeOrg` + provider IDs | Each org sends from its own email/SMS provider |
+| Per-org sender | `scope.Config` | `FromEmail`, `FromName`, `FromPhone` | Custom sender identity per org |
+| Per-user locale | `scope.Config` | `DefaultLocale` | Locale-aware template rendering |
+| Per-user opt-out | `preference.Preference` | `Overrides` map | Users control which notifications they receive |
+| Scope chain | `scope.Resolver` | user -> org -> app -> default | Hierarchical override resolution |

@@ -1,0 +1,391 @@
+---
+title: Custom Store
+description: Implementing the composite store.Store interface for a custom Herald backend.
+---
+
+All Herald store backends implement a single composite interface: `store.Store`. This guide breaks down the interface, explains each sub-store, and walks through building a custom implementation.
+
+## The composite store interface
+
+The `store.Store` interface in `github.com/xraph/herald/store` embeds six subsystem interfaces plus three lifecycle methods:
+
+```go
+package store
+
+import (
+    "context"
+
+    "github.com/xraph/herald/inbox"
+    "github.com/xraph/herald/message"
+    "github.com/xraph/herald/preference"
+    "github.com/xraph/herald/provider"
+    "github.com/xraph/herald/scope"
+    "github.com/xraph/herald/template"
+)
+
+type Store interface {
+    provider.Store
+    template.Store
+    message.Store
+    inbox.Store
+    preference.Store
+    scope.Store
+
+    Migrate(ctx context.Context) error
+    Ping(ctx context.Context) error
+    Close() error
+}
+```
+
+## Sub-store interfaces
+
+### provider.Store (6 methods)
+
+```go
+package provider
+
+type Store interface {
+    CreateProvider(ctx context.Context, p *Provider) error
+    GetProvider(ctx context.Context, id id.ProviderID) (*Provider, error)
+    UpdateProvider(ctx context.Context, p *Provider) error
+    DeleteProvider(ctx context.Context, id id.ProviderID) error
+    ListProviders(ctx context.Context, appID, channel string) ([]*Provider, error)
+    ListAllProviders(ctx context.Context, appID string) ([]*Provider, error)
+}
+```
+
+Key behaviours:
+- `CreateProvider` must store the provider with its TypeID (`hpvd_...`) as the primary key.
+- `ListProviders` filters by `appID` and `channel`.
+- `ListAllProviders` returns all providers for an app regardless of channel.
+- Return `herald.ErrProviderNotFound` when a provider does not exist.
+
+### template.Store (12 methods)
+
+```go
+package template
+
+type Store interface {
+    CreateTemplate(ctx context.Context, t *Template) error
+    GetTemplate(ctx context.Context, id id.TemplateID) (*Template, error)
+    GetTemplateBySlug(ctx context.Context, appID, slug, channel string) (*Template, error)
+    UpdateTemplate(ctx context.Context, t *Template) error
+    DeleteTemplate(ctx context.Context, id id.TemplateID) error
+    ListTemplates(ctx context.Context, appID string) ([]*Template, error)
+    ListTemplatesByChannel(ctx context.Context, appID, channel string) ([]*Template, error)
+    CreateVersion(ctx context.Context, v *Version) error
+    GetVersion(ctx context.Context, id id.TemplateVersionID) (*Version, error)
+    UpdateVersion(ctx context.Context, v *Version) error
+    DeleteVersion(ctx context.Context, id id.TemplateVersionID) error
+    ListVersions(ctx context.Context, templateID id.TemplateID) ([]*Version, error)
+}
+```
+
+Key behaviours:
+- `GetTemplate` must also load and attach associated `Versions` to the returned template.
+- `GetTemplateBySlug` looks up a template by the `(appID, slug, channel)` triple.
+- `DeleteTemplate` must also delete all associated versions (cascade).
+- Enforce unique constraint on `(appID, slug, channel)`.
+- Enforce unique constraint on `(templateID, locale)` for versions.
+
+### message.Store (4 methods)
+
+```go
+package message
+
+type Store interface {
+    CreateMessage(ctx context.Context, m *Message) error
+    GetMessage(ctx context.Context, id id.MessageID) (*Message, error)
+    UpdateMessageStatus(ctx context.Context, id id.MessageID, status Status, errMsg string) error
+    ListMessages(ctx context.Context, appID string, opts ListOptions) ([]*Message, error)
+}
+```
+
+Key behaviours:
+- `UpdateMessageStatus` updates the `status` and `error` fields. When status is `sent`, also set `sent_at`. When status is `delivered`, also set `delivered_at`.
+- `ListMessages` supports filtering by `Channel`, `Status`, and pagination via `Offset`/`Limit`.
+- Messages are ordered by `created_at DESC` by default.
+
+### inbox.Store (7 methods)
+
+```go
+package inbox
+
+type Store interface {
+    CreateNotification(ctx context.Context, n *Notification) error
+    GetNotification(ctx context.Context, id id.InboxID) (*Notification, error)
+    DeleteNotification(ctx context.Context, id id.InboxID) error
+    MarkRead(ctx context.Context, id id.InboxID) error
+    MarkAllRead(ctx context.Context, appID, userID string) error
+    UnreadCount(ctx context.Context, appID, userID string) (int, error)
+    ListNotifications(ctx context.Context, appID, userID string, limit, offset int) ([]*Notification, error)
+}
+```
+
+Key behaviours:
+- `MarkRead` sets `read = true` and `read_at` to the current time.
+- `MarkAllRead` marks all unread notifications for the user as read.
+- `UnreadCount` returns the number of notifications where `read = false`.
+- `ListNotifications` returns notifications ordered by `created_at DESC`.
+
+### preference.Store (3 methods)
+
+```go
+package preference
+
+type Store interface {
+    GetPreference(ctx context.Context, appID, userID string) (*Preference, error)
+    SetPreference(ctx context.Context, p *Preference) error
+    DeletePreference(ctx context.Context, appID, userID string) error
+}
+```
+
+Key behaviours:
+- `SetPreference` is an upsert: creates or updates the preference for `(appID, userID)`.
+- The `Overrides` field is a `map[string]ChannelPreference` that maps template slugs to per-channel opt-in/out settings.
+- Return `herald.ErrPreferenceNotFound` when a preference does not exist.
+
+### scope.Store (4 methods)
+
+```go
+package scope
+
+type Store interface {
+    GetScopedConfig(ctx context.Context, appID string, scopeType ScopeType, scopeID string) (*Config, error)
+    SetScopedConfig(ctx context.Context, cfg *Config) error
+    DeleteScopedConfig(ctx context.Context, id id.ScopedConfigID) error
+    ListScopedConfigs(ctx context.Context, appID string) ([]*Config, error)
+}
+```
+
+Key behaviours:
+- `SetScopedConfig` is an upsert: creates or updates the config for `(appID, scope, scopeID)`.
+- `ScopeType` is one of `"app"`, `"org"`, or `"user"`.
+- `ListScopedConfigs` returns all scoped configs for an app.
+- Return `herald.ErrScopedConfigNotFound` when a config does not exist.
+
+## Total method count
+
+| Sub-store | Methods |
+|-----------|---------|
+| `provider.Store` | 6 |
+| `template.Store` | 12 |
+| `message.Store` | 4 |
+| `inbox.Store` | 7 |
+| `preference.Store` | 3 |
+| `scope.Store` | 4 |
+| Lifecycle (`Migrate`, `Ping`, `Close`) | 3 |
+| **Total** | **39** |
+
+## Compile-time interface check
+
+Always add a compile-time assertion at the top of your store file to ensure your implementation satisfies the interface at build time:
+
+```go
+var _ store.Store = (*MyStore)(nil)
+```
+
+Or verify each sub-interface individually:
+
+```go
+var (
+    _ provider.Store   = (*MyStore)(nil)
+    _ template.Store   = (*MyStore)(nil)
+    _ message.Store    = (*MyStore)(nil)
+    _ inbox.Store      = (*MyStore)(nil)
+    _ preference.Store = (*MyStore)(nil)
+    _ scope.Store      = (*MyStore)(nil)
+)
+```
+
+## Step-by-step implementation guide
+
+### Step 1: Define the struct
+
+```go
+package redisstore
+
+import (
+    "context"
+
+    "github.com/redis/go-redis/v9"
+
+    "github.com/xraph/herald/store"
+)
+
+// Compile-time interface check.
+var _ store.Store = (*Store)(nil)
+
+type Store struct {
+    client *redis.Client
+}
+
+func New(client *redis.Client) *Store {
+    return &Store{client: client}
+}
+```
+
+### Step 2: Implement lifecycle methods
+
+```go
+func (s *Store) Migrate(_ context.Context) error {
+    // Redis is schema-less -- nothing to migrate.
+    return nil
+}
+
+func (s *Store) Ping(ctx context.Context) error {
+    return s.client.Ping(ctx).Err()
+}
+
+func (s *Store) Close() error {
+    return s.client.Close()
+}
+```
+
+### Step 3: Implement provider.Store
+
+Design a key scheme for your backend. A common pattern for Redis:
+
+| Entity | Key pattern | Value |
+|--------|------------|-------|
+| Provider | `herald:provider:{id}` | JSON-serialized `provider.Provider` |
+| Provider index | `herald:providers:{appID}` | Redis set of provider IDs |
+
+```go
+import (
+    "encoding/json"
+
+    "github.com/xraph/herald"
+    "github.com/xraph/herald/id"
+    "github.com/xraph/herald/provider"
+)
+
+func (s *Store) CreateProvider(ctx context.Context, p *provider.Provider) error {
+    data, _ := json.Marshal(p)
+    pipe := s.client.Pipeline()
+    pipe.Set(ctx, "herald:provider:"+p.ID.String(), data, 0)
+    pipe.SAdd(ctx, "herald:providers:"+p.AppID, p.ID.String())
+    _, err := pipe.Exec(ctx)
+    return err
+}
+
+func (s *Store) GetProvider(ctx context.Context, pid id.ProviderID) (*provider.Provider, error) {
+    data, err := s.client.Get(ctx, "herald:provider:"+pid.String()).Bytes()
+    if err != nil {
+        if err == redis.Nil {
+            return nil, herald.ErrProviderNotFound
+        }
+        return nil, err
+    }
+    var p provider.Provider
+    if err := json.Unmarshal(data, &p); err != nil {
+        return nil, err
+    }
+    return &p, nil
+}
+
+// ... implement UpdateProvider, DeleteProvider, ListProviders, ListAllProviders
+```
+
+### Step 4: Implement remaining sub-stores
+
+Follow the same pattern for each sub-store:
+
+1. Define a key scheme for each entity type.
+2. Use JSON serialization for complex structs.
+3. Return the appropriate sentinel error when an entity is not found.
+4. Implement pagination using `Offset` and `Limit` from the `ListOptions` structs.
+5. Ensure upsert semantics for `SetPreference` and `SetScopedConfig`.
+
+### Step 5: Handle template-version association
+
+When implementing `GetTemplate`, load all associated versions and attach them to the `Template.Versions` field:
+
+```go
+func (s *Store) GetTemplate(ctx context.Context, tid id.TemplateID) (*template.Template, error) {
+    tmpl, err := s.getTemplateByID(ctx, tid)
+    if err != nil {
+        return nil, err
+    }
+    // Load and attach versions.
+    versions, _ := s.ListVersions(ctx, tid)
+    tmpl.Versions = make([]template.Version, len(versions))
+    for i, v := range versions {
+        tmpl.Versions[i] = *v
+    }
+    return tmpl, nil
+}
+```
+
+When implementing `DeleteTemplate`, delete all versions first:
+
+```go
+func (s *Store) DeleteTemplate(ctx context.Context, tid id.TemplateID) error {
+    // Delete all versions for this template.
+    versions, _ := s.ListVersions(ctx, tid)
+    for _, v := range versions {
+        _ = s.DeleteVersion(ctx, v.ID)
+    }
+    // Delete the template itself.
+    return s.deleteByKey(ctx, "herald:template:"+tid.String())
+}
+```
+
+### Step 6: Test your implementation
+
+Write tests that exercise the full `store.Store` interface:
+
+```go
+func TestRedisStore(t *testing.T) {
+    client := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+    store := redisstore.New(client)
+
+    ctx := context.Background()
+    _ = store.Migrate(ctx)
+
+    t.Run("providers", func(t *testing.T) {
+        now := time.Now().UTC()
+        p := &provider.Provider{
+            ID:      id.NewProviderID(),
+            AppID:   "testapp",
+            Name:    "TestSMTP",
+            Channel: "email",
+            Driver:  "smtp",
+            Enabled: true,
+            CreatedAt: now,
+            UpdatedAt: now,
+        }
+        err := store.CreateProvider(ctx, p)
+        require.NoError(t, err)
+
+        got, err := store.GetProvider(ctx, p.ID)
+        require.NoError(t, err)
+        require.Equal(t, "TestSMTP", got.Name)
+    })
+
+    // ... test all other sub-stores
+}
+```
+
+## Error handling
+
+Your custom store must return Herald's sentinel errors for "not found" cases:
+
+| Sentinel error | When to return |
+|---------------|----------------|
+| `herald.ErrProviderNotFound` | `GetProvider`, `UpdateProvider`, `DeleteProvider` when provider does not exist |
+| `herald.ErrTemplateNotFound` | `GetTemplate`, `GetTemplateBySlug`, `UpdateTemplate`, `DeleteTemplate` when template does not exist |
+| `herald.ErrMessageNotFound` | `GetMessage` when message does not exist |
+| `herald.ErrInboxNotFound` | `GetNotification`, `MarkRead`, `DeleteNotification` when notification does not exist |
+| `herald.ErrPreferenceNotFound` | `GetPreference`, `DeletePreference` when preference does not exist |
+| `herald.ErrScopedConfigNotFound` | `GetScopedConfig`, `DeleteScopedConfig` when config does not exist |
+
+The scope resolver, send engine, and API layer depend on these exact errors for control flow. Using `errors.Is` checks will fail if you return different errors.
+
+## Tips
+
+- **Concurrency safety** -- If your store caches data in-process (like the memory store), use `sync.RWMutex` to protect concurrent access.
+- **Upsert semantics** -- `SetPreference` and `SetScopedConfig` must create on first call and update on subsequent calls for the same key.
+- **Cascade deletes** -- `DeleteTemplate` must also remove all associated template versions. The store handles this explicitly since not all backends support foreign key cascades.
+- **Sort order** -- Messages and notifications are sorted by `created_at DESC`. Providers are sorted by `priority ASC`.
+- **TypeID keys** -- All entities use TypeID strings as primary keys (e.g., `hpvd_01h...`). Do not generate your own IDs; use the ones provided on the entity struct.

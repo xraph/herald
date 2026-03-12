@@ -1,0 +1,262 @@
+---
+title: Multi-Tenancy
+description: App-scoped data isolation and scoped provider resolution in Herald.
+---
+
+Herald is multi-tenant by design. Every entity carries an `AppID` field that scopes it to a logical application, and the scope resolution system provides layered overrides at the user, organization, and app levels.
+
+## App-scoped data isolation
+
+All Herald entities include an `app_id` field:
+
+```go
+// Every entity is scoped to an app.
+type Provider struct {
+    ID    id.ProviderID `json:"id"`
+    AppID string        `json:"app_id"`
+    // ...
+}
+
+type Template struct {
+    ID    id.TemplateID `json:"id"`
+    AppID string        `json:"app_id"`
+    // ...
+}
+```
+
+This applies to all entity types:
+
+| Entity | AppID field | Additional scope fields |
+|--------|-------------|------------------------|
+| Provider | `app_id` | -- |
+| Template | `app_id` | -- |
+| Message | `app_id` | `env_id` |
+| Notification | `app_id` | `env_id`, `user_id` |
+| Preference | `app_id` | `user_id` |
+| Scoped Config | `app_id` | `scope` + `scope_id` |
+
+All store queries include `app_id` in their WHERE clause, ensuring complete data isolation between applications. A provider created for app `"myapp"` is never visible to app `"otherapp"`.
+
+## The scope resolution chain
+
+When Herald sends a notification, it must resolve which provider to use. The `scope.Resolver` walks a layered resolution chain:
+
+```
+User scope --> Org scope --> App scope --> Global fallback
+```
+
+At each level, the resolver checks for a scoped configuration that specifies a provider override for the requested channel. The first match wins.
+
+### Resolution steps
+
+```go
+// 1. User-scoped override
+//    Check for a ScopedConfig where scope="user" and scope_id=userID.
+//    If it has a provider for this channel, use it.
+
+// 2. Org-scoped override
+//    Check for a ScopedConfig where scope="org" and scope_id=orgID.
+//    If it has a provider for this channel, use it.
+
+// 3. App-scoped default
+//    Check for a ScopedConfig where scope="app" and scope_id=appID.
+//    If it has a provider for this channel, use it.
+
+// 4. Global fallback
+//    List all enabled providers for this app + channel,
+//    sort by priority (lower = higher priority),
+//    and use the first enabled provider.
+```
+
+### How it works in code
+
+The resolver is initialized internally when you create a Herald instance:
+
+```go
+// Internal wiring (done automatically by herald.New).
+resolver := scope.NewResolver(scopeStore, providerStore, logger)
+```
+
+During `Send`, Herald calls the resolver:
+
+```go
+resolved, err := h.resolver.ResolveProvider(ctx, req.AppID, req.OrgID, req.UserID, channel)
+// resolved.Provider -- the provider to use
+// resolved.Config   -- the scoped config (if resolved via scope, nil for global fallback)
+```
+
+The `ResolveResult` contains both the provider and the scoped configuration, so Herald can extract sender overrides (`FromEmail`, `FromName`, `FromPhone`) from the config:
+
+```go
+type ResolveResult struct {
+    Provider *provider.Provider
+    Config   *scope.Config
+}
+```
+
+### Setting up scoped configs
+
+Create scoped configs to override the default provider resolution:
+
+```go
+import "github.com/xraph/herald/scope"
+
+// App-level default: use Resend for all emails.
+appConfig := &scope.Config{
+    ID:              id.NewScopedConfigID(),
+    AppID:           "myapp",
+    Scope:           scope.ScopeApp,
+    ScopeID:         "myapp",
+    EmailProviderID: resendProviderID.String(),
+    FromEmail:       "noreply@myapp.com",
+    FromName:        "MyApp",
+}
+store.SetScopedConfig(ctx, appConfig)
+
+// Org-level override: Acme Corp uses their own SMTP server.
+orgConfig := &scope.Config{
+    ID:              id.NewScopedConfigID(),
+    AppID:           "myapp",
+    Scope:           scope.ScopeOrg,
+    ScopeID:         "org-acme",
+    EmailProviderID: acmeSMTPProviderID.String(),
+    FromEmail:       "noreply@acme.com",
+    FromName:        "Acme Corp",
+}
+store.SetScopedConfig(ctx, orgConfig)
+
+// User-level override: VIP user gets SMS via a premium provider.
+userConfig := &scope.Config{
+    ID:            id.NewScopedConfigID(),
+    AppID:         "myapp",
+    Scope:         scope.ScopeUser,
+    ScopeID:       "user-42",
+    SMSProviderID: premiumTwilioProviderID.String(),
+    FromPhone:     "+15551234567",
+}
+store.SetScopedConfig(ctx, userConfig)
+```
+
+## Environment isolation
+
+Messages and inbox notifications carry an optional `EnvID` field for environment-level isolation. This separates delivery logs and inbox data across environments (e.g. development, staging, production) within the same app.
+
+```go
+// SendRequest includes an optional EnvID.
+result, err := h.Send(ctx, &herald.SendRequest{
+    AppID:   "myapp",
+    EnvID:   "env_staging",
+    Channel: "email",
+    // ...
+})
+```
+
+The `EnvID` is written to both the `Message` and `Notification` records:
+
+```go
+type Message struct {
+    // ...
+    AppID string `json:"app_id"`
+    EnvID string `json:"env_id,omitempty"`
+    // ...
+}
+
+type Notification struct {
+    // ...
+    AppID string `json:"app_id"`
+    EnvID string `json:"env_id,omitempty"`
+    // ...
+}
+```
+
+This allows you to query delivery logs and inbox items for a specific environment without mixing test data with production data.
+
+## User preference scoping
+
+User preferences are scoped to an app + user combination. Each user has at most one preference record per app:
+
+```go
+// Get preferences for user-42 in myapp.
+pref, err := store.GetPreference(ctx, "myapp", "user-42")
+
+// Set preferences.
+store.SetPreference(ctx, &preference.Preference{
+    ID:     id.NewPreferenceID(),
+    AppID:  "myapp",
+    UserID: "user-42",
+    Overrides: map[string]preference.ChannelPreference{
+        "marketing.newsletter": {
+            Email: boolPtr(false), // opt out of marketing emails
+        },
+    },
+})
+```
+
+During `Send`, Herald automatically checks preferences before dispatching:
+
+```go
+// Internally:
+if req.UserID != "" && req.Template != "" {
+    pref, _ := h.store.GetPreference(ctx, req.AppID, req.UserID)
+    if pref != nil && pref.IsOptedOut(req.Template, channel) {
+        // Skip delivery -- return "user opted out" result
+    }
+}
+```
+
+## Sending with scope context
+
+To take advantage of the full resolution chain, provide `AppID`, `OrgID`, and `UserID` in the send request:
+
+```go
+result, err := h.Send(ctx, &herald.SendRequest{
+    AppID:    "myapp",
+    OrgID:    "org-acme",     // enables org-level scope resolution
+    UserID:   "user-42",      // enables user-level scope resolution + preference check
+    Channel:  "email",
+    Template: "order.shipped",
+    To:       []string{"alice@acme.com"},
+    Data:     map[string]any{"order_id": "ORD-123"},
+})
+```
+
+Resolution for this request:
+
+1. Check if `user-42` has a scoped config with an email provider override.
+2. If not, check if `org-acme` has a scoped config with an email provider override.
+3. If not, check if `myapp` has an app-level scoped config.
+4. If not, fall back to the highest-priority enabled email provider for `myapp`.
+
+## Multi-channel delivery
+
+Use `Herald.Notify` to send across multiple channels with a single call. The scope resolution runs independently per channel:
+
+```go
+results, err := h.Notify(ctx, &herald.NotifyRequest{
+    AppID:    "myapp",
+    OrgID:    "org-acme",
+    UserID:   "user-42",
+    Template: "order.shipped",
+    To:       []string{"alice@acme.com"},
+    Channels: []string{"email", "push", "inapp"},
+    Data:     map[string]any{"order_id": "ORD-123"},
+})
+```
+
+Each channel resolves its own provider independently through the scope chain. The email channel may use Resend while the push channel uses FCM.
+
+## Single-tenant deployments
+
+For single-tenant applications, use a constant `AppID`:
+
+```go
+const appID = "default"
+
+result, err := h.Send(ctx, &herald.SendRequest{
+    AppID:   appID,
+    Channel: "email",
+    // ...
+})
+```
+
+All Herald features work identically. The `AppID` simply never varies. You can migrate to multi-tenant later by changing this value per request.

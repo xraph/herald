@@ -1,0 +1,193 @@
+---
+title: Memory Store
+description: In-memory store for development and testing with no persistence.
+---
+
+The memory store (`herald/store/memory`) is a fully in-memory implementation of `store.Store`. It keeps all data in Go maps protected by a `sync.RWMutex`, making it safe for concurrent access. No external dependencies, database connections, or migrations are required.
+
+## Installation
+
+The memory store is included in the Herald module. No additional packages are needed.
+
+```go
+import "github.com/xraph/herald/store/memory"
+```
+
+## Creating a Store
+
+```go
+store := memory.New()
+```
+
+`memory.New()` returns a `*memory.Store` with all internal maps initialized and ready to use.
+
+## Constructor
+
+```go
+func New() *Store
+```
+
+No arguments are needed. The store initializes maps for all 7 entity types:
+
+- `providers` -- `map[string]*provider.Provider`
+- `templates` -- `map[string]*template.Template`
+- `versions` -- `map[string]*template.Version`
+- `messages` -- `map[string]*message.Message`
+- `notifications` -- `map[string]*inbox.Notification`
+- `preferences` -- `map[string]*preference.Preference` (key: `"appID:userID"`)
+- `scopedConfigs` -- `map[string]*scope.Config` (key: `"appID:scope:scopeID"`)
+
+## Implemented Interfaces
+
+The memory store satisfies all six subsystem store interfaces plus the three lifecycle methods that form the composite `store.Store` interface:
+
+| Interface | Package | Methods |
+|-----------|---------|---------|
+| `provider.Store` | `github.com/xraph/herald/provider` | `CreateProvider`, `GetProvider`, `UpdateProvider`, `DeleteProvider`, `ListProviders`, `ListAllProviders` |
+| `template.Store` | `github.com/xraph/herald/template` | `CreateTemplate`, `GetTemplate`, `GetTemplateBySlug`, `UpdateTemplate`, `DeleteTemplate`, `ListTemplates`, `ListTemplatesByChannel`, `CreateVersion`, `GetVersion`, `UpdateVersion`, `DeleteVersion`, `ListVersions` |
+| `message.Store` | `github.com/xraph/herald/message` | `CreateMessage`, `GetMessage`, `UpdateMessageStatus`, `ListMessages` |
+| `inbox.Store` | `github.com/xraph/herald/inbox` | `CreateNotification`, `GetNotification`, `DeleteNotification`, `MarkRead`, `MarkAllRead`, `UnreadCount`, `ListNotifications` |
+| `preference.Store` | `github.com/xraph/herald/preference` | `GetPreference`, `SetPreference`, `DeletePreference` |
+| `scope.Store` | `github.com/xraph/herald/scope` | `GetScopedConfig`, `SetScopedConfig`, `DeleteScopedConfig`, `ListScopedConfigs` |
+
+Compile-time interface check:
+
+```go
+var _ store.Store = (*Store)(nil)
+```
+
+## Concurrency Safety
+
+All methods acquire either a read lock (`RLock`) or a write lock (`Lock`) on the internal `sync.RWMutex`. This makes the store safe for concurrent use from multiple goroutines, including parallel test execution.
+
+## Lifecycle Methods
+
+| Method | Behaviour |
+|--------|-----------|
+| `Migrate(ctx)` | No-op -- returns `nil` |
+| `Ping(ctx)` | Always returns `nil` |
+| `Close()` | No-op -- returns `nil` |
+
+The memory store has no schema to create and no connection to check, so all lifecycle methods succeed immediately. Calling `Migrate` is good practice for consistency with other backends.
+
+## Key Scheme
+
+Entities are keyed using their TypeID string representation. Composite-keyed entities use colon-separated keys:
+
+| Entity | Key format |
+|--------|------------|
+| Providers, Templates, Versions, Messages, Notifications | TypeID string (e.g., `hpvd_...`) |
+| Preferences | `"appID:userID"` |
+| Scoped Configs | `"appID:scope:scopeID"` |
+
+## Template Version Association
+
+When retrieving templates, the memory store automatically attaches associated versions by scanning the `versions` map for matching `TemplateID` values. Deleting a template also removes all its associated versions.
+
+## No Migration Needed
+
+Since data is stored in Go maps, there is no schema to create or migrate. The `Migrate` method is a no-op that always returns `nil`.
+
+## Complete Example
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "time"
+
+    "github.com/xraph/herald"
+    "github.com/xraph/herald/driver/email"
+    "github.com/xraph/herald/id"
+    "github.com/xraph/herald/provider"
+    "github.com/xraph/herald/store/memory"
+    "github.com/xraph/herald/template"
+)
+
+func main() {
+    ctx := context.Background()
+
+    // Create the in-memory store.
+    store := memory.New()
+
+    // Create a Herald instance with the memory store.
+    h, err := herald.New(
+        herald.WithStore(store),
+        herald.WithDriver(&email.SMTPDriver{}),
+    )
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // Create a provider.
+    now := time.Now().UTC()
+    p := &provider.Provider{
+        ID:      id.NewProviderID(),
+        AppID:   "myapp",
+        Name:    "SMTP",
+        Channel: "email",
+        Driver:  "smtp",
+        Credentials: map[string]string{
+            "host": "smtp.example.com",
+            "port": "587",
+        },
+        Enabled:   true,
+        CreatedAt: now,
+        UpdatedAt: now,
+    }
+    if err := store.CreateProvider(ctx, p); err != nil {
+        log.Fatal(err)
+    }
+    fmt.Printf("Provider created: %s\n", p.ID)
+
+    // Create a template.
+    tmpl := &template.Template{
+        ID:        id.NewTemplateID(),
+        AppID:     "myapp",
+        Slug:      "welcome",
+        Name:      "Welcome Email",
+        Channel:   "email",
+        Category:  "transactional",
+        Enabled:   true,
+        CreatedAt: now,
+        UpdatedAt: now,
+    }
+    if err := store.CreateTemplate(ctx, tmpl); err != nil {
+        log.Fatal(err)
+    }
+    fmt.Printf("Template created: %s\n", tmpl.ID)
+
+    _ = h
+}
+```
+
+## Swapping to a Persistent Backend
+
+The memory store implements the same `store.Store` interface as all other backends. Switching to a production store is a single-line change:
+
+```go
+// Development / testing
+store := memory.New()
+
+// Production (PostgreSQL)
+store := postgres.New(db)
+
+// Production (MongoDB)
+store := mongo.New(db)
+```
+
+## When to Use
+
+- **Unit tests** -- no setup, no teardown, zero dependencies.
+- **Development** -- quick iteration without running a database server.
+- **CI pipelines** -- fast, deterministic tests with no external services.
+- **Prototyping** -- explore Herald's API surface without infrastructure.
+
+## When Not to Use
+
+- **Production** -- data is lost on process restart.
+- **Multi-instance deployments** -- each process has its own isolated store.
+- **Performance benchmarking** -- behaviour characteristics differ from a real database.

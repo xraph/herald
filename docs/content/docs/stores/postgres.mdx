@@ -1,0 +1,279 @@
+---
+title: PostgreSQL Store
+description: Production-ready PostgreSQL backend using Grove ORM with pgdriver.
+---
+
+The PostgreSQL store (`herald/store/postgres`) provides a production-ready backend for Herald using [Grove ORM](https://github.com/xraph/grove) with `pgdriver`. It stores all Herald entities in 7 tables with JSONB columns for maps and arrays, indexed for efficient querying, and supports upsert with `ON CONFLICT`.
+
+## Installation
+
+```bash
+go get github.com/xraph/herald
+go get github.com/xraph/grove
+go get github.com/xraph/grove/drivers/pgdriver
+```
+
+## Creating a Store
+
+```go
+import (
+    "github.com/xraph/grove"
+    "github.com/xraph/grove/drivers/pgdriver"
+    "github.com/xraph/herald/store/postgres"
+)
+
+// Open a PostgreSQL connection via Grove.
+db := grove.Open(pgdriver.New(
+    pgdriver.WithDSN("postgres://user:pass@localhost:5432/herald?sslmode=disable"),
+))
+
+// Create the Herald store.
+store := postgres.New(db)
+
+// Run migrations (idempotent -- safe on every startup).
+if err := store.Migrate(ctx); err != nil {
+    log.Fatal("migration failed:", err)
+}
+```
+
+## Constructor
+
+```go
+func New(db *grove.DB) *Store
+```
+
+`New` accepts a `*grove.DB` backed by `pgdriver` and returns a `*Store` that satisfies the `store.Store` interface. Internally it calls `pgdriver.Unwrap(db)` to access the PostgreSQL-specific query builder.
+
+## Tables
+
+The store creates 7 tables. All use `TEXT` primary keys (TypeIDs), `TIMESTAMPTZ` timestamps defaulting to `NOW()`, and `JSONB` for structured data.
+
+### herald_providers
+
+Stores notification provider configurations (email, SMS, push drivers).
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | `TEXT PRIMARY KEY` | TypeID (`hpvd_...`) |
+| `app_id` | `TEXT NOT NULL` | Application scope |
+| `name` | `TEXT NOT NULL` | Human-readable name |
+| `channel` | `TEXT NOT NULL` | `email`, `sms`, `push`, `inapp` |
+| `driver` | `TEXT NOT NULL` | Driver name (`smtp`, `resend`, `twilio`, `fcm`) |
+| `credentials` | `JSONB NOT NULL DEFAULT '{}'` | Driver credentials |
+| `settings` | `JSONB NOT NULL DEFAULT '{}'` | Driver settings |
+| `priority` | `INTEGER NOT NULL DEFAULT 0` | Lower = higher priority |
+| `enabled` | `BOOLEAN NOT NULL DEFAULT TRUE` | Active flag |
+| `created_at` | `TIMESTAMPTZ NOT NULL DEFAULT NOW()` | |
+| `updated_at` | `TIMESTAMPTZ NOT NULL DEFAULT NOW()` | |
+
+**Indexes:** `(app_id, channel)`, `(app_id)`
+
+### herald_templates
+
+Stores notification template definitions.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | `TEXT PRIMARY KEY` | TypeID (`htpl_...`) |
+| `app_id` | `TEXT NOT NULL` | Application scope |
+| `slug` | `TEXT NOT NULL` | URL-safe identifier |
+| `name` | `TEXT NOT NULL` | Display name |
+| `channel` | `TEXT NOT NULL` | Channel type |
+| `category` | `TEXT NOT NULL DEFAULT 'transactional'` | `auth`, `transactional`, `marketing`, `system` |
+| `variables` | `JSONB` | Expected template variables |
+| `is_system` | `BOOLEAN NOT NULL DEFAULT FALSE` | System template flag |
+| `enabled` | `BOOLEAN NOT NULL DEFAULT TRUE` | Active flag |
+| `created_at` | `TIMESTAMPTZ NOT NULL DEFAULT NOW()` | |
+| `updated_at` | `TIMESTAMPTZ NOT NULL DEFAULT NOW()` | |
+
+**Unique constraint:** `(app_id, slug, channel)`
+**Indexes:** `(app_id)`, `(app_id, channel)`
+
+### herald_template_versions
+
+Stores locale-specific content for templates.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | `TEXT PRIMARY KEY` | TypeID (`htpv_...`) |
+| `template_id` | `TEXT NOT NULL REFERENCES herald_templates(id) ON DELETE CASCADE` | Parent template |
+| `locale` | `TEXT NOT NULL DEFAULT ''` | Locale code (e.g., `en`, `fr`) |
+| `subject` | `TEXT` | Email subject line |
+| `html` | `TEXT` | HTML body |
+| `text` | `TEXT` | Plain text body |
+| `title` | `TEXT` | Push/in-app title |
+| `active` | `BOOLEAN NOT NULL DEFAULT TRUE` | Active flag |
+| `created_at` | `TIMESTAMPTZ NOT NULL DEFAULT NOW()` | |
+| `updated_at` | `TIMESTAMPTZ NOT NULL DEFAULT NOW()` | |
+
+**Unique constraint:** `(template_id, locale)`
+**Indexes:** `(template_id)`
+
+### herald_messages
+
+Stores the delivery log of sent or queued notifications.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | `TEXT PRIMARY KEY` | TypeID (`hmsg_...`) |
+| `app_id` | `TEXT NOT NULL` | Application scope |
+| `env_id` | `TEXT NOT NULL DEFAULT ''` | Environment scope |
+| `template_id` | `TEXT NOT NULL DEFAULT ''` | Template used |
+| `provider_id` | `TEXT NOT NULL DEFAULT ''` | Provider used |
+| `channel` | `TEXT NOT NULL` | Channel type |
+| `recipient` | `TEXT NOT NULL` | Recipient address |
+| `subject` | `TEXT NOT NULL DEFAULT ''` | Message subject |
+| `body` | `TEXT NOT NULL DEFAULT ''` | Message body (truncated) |
+| `status` | `TEXT NOT NULL DEFAULT 'queued'` | `queued`, `sending`, `sent`, `failed`, `bounced`, `delivered` |
+| `error` | `TEXT NOT NULL DEFAULT ''` | Error message on failure |
+| `metadata` | `JSONB NOT NULL DEFAULT '{}'` | User-defined metadata |
+| `async` | `BOOLEAN NOT NULL DEFAULT FALSE` | Async delivery flag |
+| `attempts` | `INTEGER NOT NULL DEFAULT 0` | Delivery attempts |
+| `sent_at` | `TIMESTAMPTZ` | When sent |
+| `delivered_at` | `TIMESTAMPTZ` | When delivered |
+| `created_at` | `TIMESTAMPTZ NOT NULL DEFAULT NOW()` | |
+
+**Indexes:** `(app_id, status)`, `(created_at DESC)`
+
+### herald_inbox
+
+Stores in-app notifications for user inboxes.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | `TEXT PRIMARY KEY` | TypeID (`hinb_...`) |
+| `app_id` | `TEXT NOT NULL` | Application scope |
+| `env_id` | `TEXT NOT NULL DEFAULT ''` | Environment scope |
+| `user_id` | `TEXT NOT NULL` | Target user |
+| `type` | `TEXT NOT NULL` | Notification type slug |
+| `title` | `TEXT NOT NULL` | Display title |
+| `body` | `TEXT NOT NULL DEFAULT ''` | Body text |
+| `action_url` | `TEXT NOT NULL DEFAULT ''` | CTA link |
+| `image_url` | `TEXT NOT NULL DEFAULT ''` | Optional image |
+| `read` | `BOOLEAN NOT NULL DEFAULT FALSE` | Read state |
+| `read_at` | `TIMESTAMPTZ` | When marked read |
+| `metadata` | `JSONB NOT NULL DEFAULT '{}'` | User-defined metadata |
+| `expires_at` | `TIMESTAMPTZ` | Optional expiration |
+| `created_at` | `TIMESTAMPTZ NOT NULL DEFAULT NOW()` | |
+
+**Indexes:** `(user_id, read, created_at DESC)`, `(app_id, user_id)`
+
+### herald_preferences
+
+Stores per-user notification opt-in/opt-out preferences.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | `TEXT PRIMARY KEY` | TypeID (`hprf_...`) |
+| `app_id` | `TEXT NOT NULL` | Application scope |
+| `user_id` | `TEXT NOT NULL` | User ID |
+| `overrides` | `JSONB NOT NULL DEFAULT '{}'` | Per-template channel preferences |
+| `created_at` | `TIMESTAMPTZ NOT NULL DEFAULT NOW()` | |
+| `updated_at` | `TIMESTAMPTZ NOT NULL DEFAULT NOW()` | |
+
+**Unique constraint:** `(app_id, user_id)`
+
+### herald_scoped_configs
+
+Stores scoped provider configuration overrides (app/org/user level).
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | `TEXT PRIMARY KEY` | TypeID (`hscf_...`) |
+| `app_id` | `TEXT NOT NULL` | Application scope |
+| `scope` | `TEXT NOT NULL` | `app`, `org`, or `user` |
+| `scope_id` | `TEXT NOT NULL` | Scope entity ID |
+| `email_provider_id` | `TEXT NOT NULL DEFAULT ''` | Email provider override |
+| `sms_provider_id` | `TEXT NOT NULL DEFAULT ''` | SMS provider override |
+| `push_provider_id` | `TEXT NOT NULL DEFAULT ''` | Push provider override |
+| `from_email` | `TEXT NOT NULL DEFAULT ''` | Sender email override |
+| `from_name` | `TEXT NOT NULL DEFAULT ''` | Sender name override |
+| `from_phone` | `TEXT NOT NULL DEFAULT ''` | Sender phone override |
+| `default_locale` | `TEXT NOT NULL DEFAULT ''` | Default locale override |
+| `created_at` | `TIMESTAMPTZ NOT NULL DEFAULT NOW()` | |
+| `updated_at` | `TIMESTAMPTZ NOT NULL DEFAULT NOW()` | |
+
+**Unique constraint:** `(app_id, scope, scope_id)`
+
+## UPSERT Patterns
+
+The PostgreSQL store uses `INSERT ... ON CONFLICT DO UPDATE` for preferences and scoped configs, ensuring idempotent writes:
+
+```go
+// Preference upsert
+_, err := s.pg.NewInsert(m).
+    OnConflict("(app_id, user_id) DO UPDATE").
+    Set("overrides = EXCLUDED.overrides").
+    Set("updated_at = EXCLUDED.updated_at").
+    Exec(ctx)
+
+// Scoped config upsert
+_, err := s.pg.NewInsert(m).
+    OnConflict("(app_id, scope, scope_id) DO UPDATE").
+    Set("email_provider_id = EXCLUDED.email_provider_id").
+    // ... other fields
+    Exec(ctx)
+```
+
+## Lifecycle Methods
+
+| Method | Behaviour |
+|--------|-----------|
+| `Migrate(ctx)` | Creates all 7 tables and indexes via Grove's migration orchestrator |
+| `Ping(ctx)` | Calls `db.Ping(ctx)` to verify database connectivity |
+| `Close()` | Calls `db.Close()` to release the database connection |
+
+## Connection Setup Example
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+    "os"
+
+    "github.com/xraph/grove"
+    "github.com/xraph/grove/drivers/pgdriver"
+    "github.com/xraph/herald"
+    "github.com/xraph/herald/store/postgres"
+)
+
+func main() {
+    ctx := context.Background()
+
+    dsn := os.Getenv("DATABASE_URL")
+    if dsn == "" {
+        dsn = "postgres://localhost:5432/herald?sslmode=disable"
+    }
+
+    db := grove.Open(pgdriver.New(
+        pgdriver.WithDSN(dsn),
+    ))
+
+    store := postgres.New(db)
+    if err := store.Migrate(ctx); err != nil {
+        log.Fatal("migrate:", err)
+    }
+    if err := store.Ping(ctx); err != nil {
+        log.Fatal("ping:", err)
+    }
+
+    h, err := herald.New(
+        herald.WithStore(store),
+    )
+    if err != nil {
+        log.Fatal("herald:", err)
+    }
+    defer store.Close()
+
+    _ = h // use the Herald instance
+}
+```
+
+## When to Use
+
+- **Production deployments** -- durable, ACID-compliant storage with connection pooling.
+- **Multi-instance deployments** -- all application instances share the same database.
+- **Teams already using PostgreSQL** -- leverage existing infrastructure and expertise.
+- **Full feature support** -- JSONB indexing, foreign key cascades, and upsert semantics.

@@ -1,0 +1,258 @@
+---
+title: Templates
+description: Manage notification templates with slug-based lookup, i18n versioning, variable definitions, and Go template rendering.
+---
+
+Herald's template system provides reusable, localizable notification content. Templates are identified by **slug** (e.g., `auth.welcome`), support multiple **locale-specific versions**, declare their expected **variables**, and render using Go's `text/template` and `html/template` engines.
+
+## Template Entity
+
+The `template.Template` struct holds the metadata for a notification template:
+
+```go
+type Template struct {
+    ID        id.TemplateID `json:"id"`
+    AppID     string        `json:"app_id"`
+    Slug      string        `json:"slug"`         // unique per app+channel
+    Name      string        `json:"name"`
+    Channel   string        `json:"channel"`       // "email", "sms", "push", "inapp"
+    Category  string        `json:"category"`
+    Variables []Variable    `json:"variables"`
+    Versions  []Version     `json:"versions"`
+    IsSystem  bool          `json:"is_system"`
+    Enabled   bool          `json:"enabled"`
+    CreatedAt time.Time     `json:"created_at"`
+    UpdatedAt time.Time     `json:"updated_at"`
+}
+```
+
+Templates are identified by TypeIDs with the `htpl` prefix.
+
+## Slug-Based Lookup
+
+Templates are resolved at send time by their `Slug` combined with `AppID` and `Channel`. This allows you to use the same slug across different channels (e.g., `auth.welcome` for both email and in-app):
+
+```go
+tmpl, err := store.GetTemplateBySlug(ctx, appID, "auth.welcome", "email")
+```
+
+Slugs follow a dotted naming convention grouping templates by domain:
+
+- `auth.welcome` -- Welcome email sent after registration
+- `auth.email-verification` -- Email verification link
+- `auth.password-reset` -- Password reset link
+- `auth.mfa-code` -- MFA verification code (SMS)
+- `auth.invitation` -- Organization invitation
+
+## Categories
+
+Templates are organized into categories for management:
+
+```go
+const (
+    CategoryAuth          = "auth"
+    CategoryTransactional = "transactional"
+    CategoryMarketing     = "marketing"
+    CategorySystem        = "system"
+)
+```
+
+## i18n Versions
+
+Each template can have multiple locale-specific **versions**. A version contains the actual content for a particular locale:
+
+```go
+type Version struct {
+    ID         id.TemplateVersionID `json:"id"`
+    TemplateID id.TemplateID        `json:"template_id"`
+    Locale     string               `json:"locale"`    // "en", "fr", "de", "es", "" (default)
+    Subject    string               `json:"subject"`   // email subject line
+    HTML       string               `json:"html"`      // HTML body (email)
+    Text       string               `json:"text"`      // plain text body
+    Title      string               `json:"title"`     // notification title (push/inapp)
+    Active     bool                 `json:"active"`
+    CreatedAt  time.Time            `json:"created_at"`
+    UpdatedAt  time.Time            `json:"updated_at"`
+}
+```
+
+Version IDs use the `htpv` prefix.
+
+### Locale Resolution
+
+When rendering a template, Herald resolves the best matching version through a fallback chain:
+
+1. **Exact locale match** -- e.g., `fr-CA`
+2. **Language-only match** -- e.g., `fr` (stripped from `fr-CA`)
+3. **Default version** -- the version with an empty locale `""`
+
+```go
+// The renderer walks versions to find the best match.
+func (r *Renderer) findVersion(tmpl *Template, locale string) *Version {
+    // 1. Exact match
+    // 2. Language prefix match (e.g., "en" from "en-US")
+    // 3. Default version (locale == "")
+}
+```
+
+Only active versions (`Active: true`) are considered.
+
+## Variable Definitions
+
+Templates declare expected variables with type information and validation:
+
+```go
+type Variable struct {
+    Name        string `json:"name"`
+    Type        string `json:"type"`         // "string", "url", etc.
+    Required    bool   `json:"required"`
+    Default     string `json:"default"`
+    Description string `json:"description"`
+}
+```
+
+Before rendering, the renderer validates that all required variables are present in the data map. Variables with a `Default` value are not flagged as missing:
+
+```go
+// Validation runs before rendering
+for _, v := range tmpl.Variables {
+    if v.Required {
+        if _, ok := data[v.Name]; !ok && v.Default == "" {
+            return fmt.Errorf("%w: %s", ErrMissingRequiredVariable, v.Name)
+        }
+    }
+}
+```
+
+### Example Variable Definitions
+
+```go
+Variables: []template.Variable{
+    {Name: "user_name",  Type: "string", Required: true,  Description: "User's display name"},
+    {Name: "app_name",   Type: "string", Required: true,  Description: "Application name"},
+    {Name: "reset_url",  Type: "url",    Required: true,  Description: "Password reset URL"},
+    {Name: "expires_in", Type: "string", Required: false, Default: "1 hour", Description: "Link expiry"},
+}
+```
+
+## Go Template Rendering
+
+Herald uses Go's standard `text/template` for plain text and subject lines, and `html/template` (which auto-escapes HTML) for HTML bodies. Each field is rendered independently:
+
+```go
+rendered, err := renderer.Render(tmpl, "en", map[string]any{
+    "user_name": "Alice",
+    "app_name":  "MyApp",
+    "reset_url": "https://myapp.com/reset?token=abc123",
+})
+// rendered.Subject = "Reset your MyApp password"
+// rendered.HTML    = "<h2>Reset Your Password</h2><p>Hi Alice,</p>..."
+// rendered.Text    = "Hi Alice,\n\nWe received a request to reset your MyApp password..."
+```
+
+### Built-in Template Functions
+
+The renderer includes helper functions available in all templates:
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `upper` | Uppercase string | `{{upper .name}}` |
+| `lower` | Lowercase string | `{{lower .email}}` |
+| `title` | Title-case string | `{{title .name}}` |
+| `truncate` | Truncate to N characters | `{{truncate .body 100}}` |
+| `default` | Return default if value is nil/empty | `{{default "Guest" .name}}` |
+| `now` | Current UTC time (RFC3339) | `{{now}}` |
+| `formatDate` | Format a time.Time | `{{formatDate .created "Jan 2, 2006"}}` |
+
+### Template Syntax Examples
+
+```text
+Subject: Welcome to {{.app_name}}!
+
+Body:
+Hi {{.user_name}},
+
+Welcome to {{.app_name}}! We're excited to have you on board.
+
+{{if .login_url}}Log in at: {{.login_url}}{{end}}
+
+{{default "1 hour" .expires_in}} until your link expires.
+```
+
+## System Templates vs Custom Templates
+
+Templates with `IsSystem: true` are seeded automatically by Herald when `SeedDefaultTemplates` is called. System templates cover common authentication and transactional flows out of the box:
+
+| Slug | Channel | Description |
+|------|---------|-------------|
+| `auth.welcome` | email, inapp | Welcome notification |
+| `auth.email-verification` | email | Email verification link |
+| `auth.password-reset` | email | Password reset link |
+| `auth.password-changed` | email, inapp | Password change confirmation |
+| `auth.invitation` | email, inapp | Organization invitation |
+| `auth.new-device-login` | email, inapp | New device login alert |
+| `auth.mfa-code` | sms | MFA verification code |
+| `auth.phone-verification` | sms | Phone verification code |
+
+System templates are only seeded if they do not already exist, so customizations are preserved:
+
+```go
+func (h *Herald) SeedDefaultTemplates(ctx context.Context, appID string) error {
+    defaults := template.DefaultTemplates(appID)
+    for _, tmpl := range defaults {
+        existing, _ := h.store.GetTemplateBySlug(ctx, appID, tmpl.Slug, tmpl.Channel)
+        if existing != nil {
+            continue // already seeded
+        }
+        _ = h.store.CreateTemplate(ctx, tmpl)
+        // ... seed versions
+    }
+    return nil
+}
+```
+
+Custom templates can be created through the API with `IsSystem: false` for any application-specific notification.
+
+## Store Interface
+
+The `template.Store` interface covers both templates and their versions:
+
+```go
+type Store interface {
+    // Template CRUD
+    CreateTemplate(ctx context.Context, t *Template) error
+    GetTemplate(ctx context.Context, templateID id.TemplateID) (*Template, error)
+    GetTemplateBySlug(ctx context.Context, appID, slug, channel string) (*Template, error)
+    UpdateTemplate(ctx context.Context, t *Template) error
+    DeleteTemplate(ctx context.Context, templateID id.TemplateID) error
+    ListTemplates(ctx context.Context, appID string) ([]*Template, error)
+    ListTemplatesByChannel(ctx context.Context, appID, channel string) ([]*Template, error)
+
+    // Version CRUD
+    CreateVersion(ctx context.Context, v *Version) error
+    GetVersion(ctx context.Context, versionID id.TemplateVersionID) (*Version, error)
+    UpdateVersion(ctx context.Context, v *Version) error
+    DeleteVersion(ctx context.Context, versionID id.TemplateVersionID) error
+    ListVersions(ctx context.Context, templateID id.TemplateID) ([]*Version, error)
+}
+```
+
+## API Endpoints
+
+Templates and versions are managed via the `/templates` route group:
+
+| Method | Path | Operation |
+|--------|------|-----------|
+| `POST` | `/templates` | Create a template |
+| `GET` | `/templates` | List templates (filter by `app_id`, `channel`) |
+| `GET` | `/templates/:id` | Get template with all versions |
+| `PUT` | `/templates/:id` | Update a template |
+| `DELETE` | `/templates/:id` | Delete template and all versions |
+| `POST` | `/templates/:id/versions` | Add a locale version |
+| `GET` | `/templates/:id/versions` | List versions for a template |
+| `PUT` | `/templates/:id/versions/:versionId` | Update a version |
+| `DELETE` | `/templates/:id/versions/:versionId` | Delete a version |
+
+## Duplicate Protection
+
+Herald enforces uniqueness on the combination of `(app_id, slug, channel)` for templates and `(template_id, locale)` for versions. Attempting to create a duplicate returns `ErrDuplicateSlug` or `ErrDuplicateLocale`.

@@ -1,0 +1,449 @@
+---
+title: Entities
+description: Core data types used across Herald's notification subsystems.
+---
+
+Herald defines a set of entity types across its subsystem packages. Each entity uses an `id.ID` identifier with an entity-specific prefix and carries an `AppID` field for multi-tenant isolation.
+
+---
+
+## Provider
+
+**Package:** `github.com/xraph/herald/provider`
+**ID prefix:** `hpvd_`
+
+A `Provider` represents a configured notification delivery backend. Each provider is scoped to an app, handles a single channel type, and is bound to a specific driver.
+
+```go
+type Provider struct {
+    ID          id.ProviderID     `json:"id"`
+    AppID       string            `json:"app_id"`
+    Name        string            `json:"name"`
+    Channel     string            `json:"channel"`
+    Driver      string            `json:"driver"`
+    Credentials map[string]string `json:"credentials,omitempty"`
+    Settings    map[string]string `json:"settings,omitempty"`
+    Priority    int               `json:"priority"`
+    Enabled     bool              `json:"enabled"`
+    CreatedAt   time.Time         `json:"created_at"`
+    UpdatedAt   time.Time         `json:"updated_at"`
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `Channel` | The notification channel: `"email"`, `"sms"`, `"push"`, or `"inapp"`. |
+| `Driver` | The driver implementation name (e.g. `"smtp"`, `"resend"`, `"twilio"`, `"fcm"`, `"inapp"`). |
+| `Credentials` | Driver-specific credentials (API keys, SMTP passwords). Stored encrypted at rest. |
+| `Settings` | Driver-specific settings (e.g. `"from"`, `"from_name"`, `"region"`). |
+| `Priority` | Lower numbers indicate higher priority. When the scope resolver falls back to listing all providers for a channel, it picks the lowest priority enabled provider first. |
+| `Enabled` | When `false`, the provider is skipped during resolution. |
+
+### Provider store interface
+
+```go
+type Store interface {
+    CreateProvider(ctx context.Context, p *Provider) error
+    GetProvider(ctx context.Context, providerID id.ProviderID) (*Provider, error)
+    UpdateProvider(ctx context.Context, p *Provider) error
+    DeleteProvider(ctx context.Context, providerID id.ProviderID) error
+    ListProviders(ctx context.Context, appID string, channel string) ([]*Provider, error)
+    ListAllProviders(ctx context.Context, appID string) ([]*Provider, error)
+}
+```
+
+### Supported channels and drivers
+
+| Channel | ChannelType constant | Built-in drivers |
+|---------|---------------------|-----------------|
+| Email | `herald.ChannelEmail` (`"email"`) | `smtp`, `resend` |
+| SMS | `herald.ChannelSMS` (`"sms"`) | `twilio` |
+| Push | `herald.ChannelPush` (`"push"`) | `fcm` |
+| In-App | `herald.ChannelInApp` (`"inapp"`) | `inapp` |
+
+---
+
+## Template
+
+**Package:** `github.com/xraph/herald/template`
+**ID prefix:** `htpl_`
+
+A `Template` defines the content and structure of a notification. Templates are identified by a unique slug + channel combination within an app and support multiple locale-specific versions for internationalization.
+
+```go
+type Template struct {
+    ID        id.TemplateID `json:"id"`
+    AppID     string        `json:"app_id"`
+    Slug      string        `json:"slug"`
+    Name      string        `json:"name"`
+    Channel   string        `json:"channel"`
+    Category  string        `json:"category"`
+    Variables []Variable    `json:"variables,omitempty"`
+    Versions  []Version     `json:"versions,omitempty"`
+    IsSystem  bool          `json:"is_system"`
+    Enabled   bool          `json:"enabled"`
+    CreatedAt time.Time     `json:"created_at"`
+    UpdatedAt time.Time     `json:"updated_at"`
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `Slug` | URL-safe identifier (e.g. `"auth.welcome"`, `"order.shipped"`). Unique per app + channel. |
+| `Category` | Organizational category: `"auth"`, `"transactional"`, `"marketing"`, or `"system"`. |
+| `Variables` | Declared template variables with types, defaults, and required flags. |
+| `IsSystem` | System templates are seeded automatically and cannot be deleted via the API. |
+| `Enabled` | When `false`, sending with this template returns `ErrTemplateDisabled`. |
+
+### Category constants
+
+```go
+const (
+    CategoryAuth          = "auth"
+    CategoryTransactional = "transactional"
+    CategoryMarketing     = "marketing"
+    CategorySystem        = "system"
+)
+```
+
+### Variable
+
+A `Variable` describes an expected placeholder in the template content:
+
+```go
+type Variable struct {
+    Name        string `json:"name"`
+    Type        string `json:"type"`
+    Required    bool   `json:"required"`
+    Default     string `json:"default,omitempty"`
+    Description string `json:"description,omitempty"`
+}
+```
+
+When `Required` is `true` and the caller does not provide the variable in the `Data` map, rendering returns `ErrMissingRequiredVariable`.
+
+### Template Version
+
+**ID prefix:** `htpv_`
+
+A `Version` represents a locale-specific content variant of a template. Each version contains the actual rendered content (subject, HTML, text, title) for a single locale.
+
+```go
+type Version struct {
+    ID         id.TemplateVersionID `json:"id"`
+    TemplateID id.TemplateID        `json:"template_id"`
+    Locale     string               `json:"locale"`
+    Subject    string               `json:"subject,omitempty"`
+    HTML       string               `json:"html,omitempty"`
+    Text       string               `json:"text,omitempty"`
+    Title      string               `json:"title,omitempty"`
+    Active     bool                 `json:"active"`
+    CreatedAt  time.Time            `json:"created_at"`
+    UpdatedAt  time.Time            `json:"updated_at"`
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `Locale` | BCP 47 locale tag (e.g. `"en"`, `"fr"`, `"pt-BR"`). Unique per template. |
+| `Subject` | Email subject line (email channel). |
+| `HTML` | HTML body (email channel). |
+| `Text` | Plain-text body (email, SMS channels). |
+| `Title` | Notification title (push, in-app channels). |
+| `Active` | When `false`, this version is skipped during locale resolution. |
+
+### Template store interface
+
+```go
+type Store interface {
+    // Template CRUD
+    CreateTemplate(ctx context.Context, t *Template) error
+    GetTemplate(ctx context.Context, templateID id.TemplateID) (*Template, error)
+    GetTemplateBySlug(ctx context.Context, appID string, slug string, channel string) (*Template, error)
+    UpdateTemplate(ctx context.Context, t *Template) error
+    DeleteTemplate(ctx context.Context, templateID id.TemplateID) error
+    ListTemplates(ctx context.Context, appID string) ([]*Template, error)
+    ListTemplatesByChannel(ctx context.Context, appID string, channel string) ([]*Template, error)
+
+    // Version CRUD
+    CreateVersion(ctx context.Context, v *Version) error
+    GetVersion(ctx context.Context, versionID id.TemplateVersionID) (*Version, error)
+    UpdateVersion(ctx context.Context, v *Version) error
+    DeleteVersion(ctx context.Context, versionID id.TemplateVersionID) error
+    ListVersions(ctx context.Context, templateID id.TemplateID) ([]*Version, error)
+}
+```
+
+---
+
+## Message
+
+**Package:** `github.com/xraph/herald/message`
+**ID prefix:** `hmsg_`
+
+A `Message` represents a delivery log entry for a sent or queued notification. Every call to `Herald.Send` creates a message record that tracks the full lifecycle of the delivery attempt.
+
+```go
+type Message struct {
+    ID          id.MessageID      `json:"id"`
+    AppID       string            `json:"app_id"`
+    EnvID       string            `json:"env_id,omitempty"`
+    TemplateID  string            `json:"template_id,omitempty"`
+    ProviderID  string            `json:"provider_id,omitempty"`
+    Channel     string            `json:"channel"`
+    Recipient   string            `json:"recipient"`
+    Subject     string            `json:"subject,omitempty"`
+    Body        string            `json:"body,omitempty"`
+    Status      Status            `json:"status"`
+    Error       string            `json:"error,omitempty"`
+    Metadata    map[string]string `json:"metadata,omitempty"`
+    Async       bool              `json:"async"`
+    Attempts    int               `json:"attempts"`
+    SentAt      *time.Time        `json:"sent_at,omitempty"`
+    DeliveredAt *time.Time        `json:"delivered_at,omitempty"`
+    CreatedAt   time.Time         `json:"created_at"`
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `EnvID` | Optional environment identifier for environment-scoped delivery logs. |
+| `TemplateID` | The template slug used to render this message (empty for raw sends). |
+| `ProviderID` | The provider that handled delivery. |
+| `Recipient` | The destination address (email, phone number, device token, user ID). |
+| `Body` | Truncated to `Config.TruncateBodyAt` characters (default 4096). |
+| `Status` | Current delivery status (see lifecycle below). |
+| `Error` | Error message if delivery failed. |
+| `Async` | Whether the send was dispatched asynchronously. |
+| `Attempts` | Number of delivery attempts. |
+
+### Status lifecycle
+
+Messages progress through a defined status lifecycle:
+
+```
+queued --> sending --> sent --> delivered
+                  \-> failed
+                  \-> bounced
+```
+
+```go
+const (
+    StatusQueued    Status = "queued"
+    StatusSending   Status = "sending"
+    StatusSent      Status = "sent"
+    StatusFailed    Status = "failed"
+    StatusBounced   Status = "bounced"
+    StatusDelivered Status = "delivered"
+)
+```
+
+| Status | Description |
+|--------|-------------|
+| `queued` | Message created but not yet dispatched to the driver. |
+| `sending` | Driver send in progress. |
+| `sent` | Driver confirmed acceptance (does not guarantee inbox delivery). |
+| `failed` | Driver returned an error. The `Error` field contains details. |
+| `bounced` | Delivery bounced (hard bounce from the receiving server). |
+| `delivered` | Confirmed delivery to the recipient (when provider supports delivery tracking). |
+
+### ListOptions
+
+```go
+type ListOptions struct {
+    Channel string
+    Status  Status
+    Limit   int
+    Offset  int
+}
+```
+
+### Message store interface
+
+```go
+type Store interface {
+    CreateMessage(ctx context.Context, m *Message) error
+    GetMessage(ctx context.Context, messageID id.MessageID) (*Message, error)
+    UpdateMessageStatus(ctx context.Context, messageID id.MessageID, status Status, errMsg string) error
+    ListMessages(ctx context.Context, appID string, opts ListOptions) ([]*Message, error)
+}
+```
+
+---
+
+## Notification (Inbox)
+
+**Package:** `github.com/xraph/herald/inbox`
+**ID prefix:** `hinb_`
+
+A `Notification` is an in-app inbox item delivered to a specific user. When a message is sent on the `"inapp"` channel, Herald automatically creates both a `Message` (delivery log) and a `Notification` (user-facing inbox item).
+
+```go
+type Notification struct {
+    ID        id.InboxID        `json:"id"`
+    AppID     string            `json:"app_id"`
+    EnvID     string            `json:"env_id,omitempty"`
+    UserID    string            `json:"user_id"`
+    Type      string            `json:"type"`
+    Title     string            `json:"title"`
+    Body      string            `json:"body,omitempty"`
+    ActionURL string            `json:"action_url,omitempty"`
+    ImageURL  string            `json:"image_url,omitempty"`
+    Read      bool              `json:"read"`
+    ReadAt    *time.Time        `json:"read_at,omitempty"`
+    Metadata  map[string]string `json:"metadata,omitempty"`
+    ExpiresAt *time.Time        `json:"expires_at,omitempty"`
+    CreatedAt time.Time         `json:"created_at"`
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `UserID` | The user this notification belongs to. |
+| `Type` | Notification type slug (matches the template slug used to send it). |
+| `ActionURL` | Optional deep link or URL the user can navigate to. |
+| `ImageURL` | Optional image or avatar URL for rich inbox display. |
+| `Read` | Whether the user has read this notification. |
+| `ReadAt` | Timestamp of when the notification was marked as read. |
+| `ExpiresAt` | Optional expiration time after which the notification is hidden. |
+
+### Inbox store interface
+
+```go
+type Store interface {
+    CreateNotification(ctx context.Context, n *Notification) error
+    GetNotification(ctx context.Context, notifID id.InboxID) (*Notification, error)
+    DeleteNotification(ctx context.Context, notifID id.InboxID) error
+    MarkRead(ctx context.Context, notifID id.InboxID) error
+    MarkAllRead(ctx context.Context, appID string, userID string) error
+    UnreadCount(ctx context.Context, appID string, userID string) (int, error)
+    ListNotifications(ctx context.Context, appID string, userID string, limit, offset int) ([]*Notification, error)
+}
+```
+
+---
+
+## Preference
+
+**Package:** `github.com/xraph/herald/preference`
+**ID prefix:** `hprf_`
+
+A `Preference` represents a user's notification opt-in/opt-out settings for an app. Preferences are keyed by notification type slug and allow per-channel granularity.
+
+```go
+type Preference struct {
+    ID        id.PreferenceID              `json:"id"`
+    AppID     string                       `json:"app_id"`
+    UserID    string                       `json:"user_id"`
+    Overrides map[string]ChannelPreference `json:"overrides"`
+    CreatedAt time.Time                    `json:"created_at"`
+    UpdatedAt time.Time                    `json:"updated_at"`
+}
+```
+
+The `Overrides` map is keyed by notification type slug (e.g. `"auth.welcome"`, `"order.shipped"`). Each value is a `ChannelPreference` that controls per-channel opt-in/opt-out:
+
+```go
+type ChannelPreference struct {
+    Email *bool `json:"email,omitempty"`
+    SMS   *bool `json:"sms,omitempty"`
+    Push  *bool `json:"push,omitempty"`
+    InApp *bool `json:"inapp,omitempty"`
+}
+```
+
+A `nil` pointer means "use default" (opted in). An explicit `false` means the user has opted out of that channel for that notification type.
+
+### Checking opt-out status
+
+The `IsOptedOut` method checks whether a user has explicitly opted out:
+
+```go
+func (p *Preference) IsOptedOut(notifType string, channel string) bool
+```
+
+```go
+pref, _ := store.GetPreference(ctx, "myapp", "user-42")
+
+if pref.IsOptedOut("marketing.newsletter", "email") {
+    // User opted out of marketing emails -- skip delivery.
+}
+```
+
+Herald checks preferences automatically during `Send`. If a user has opted out, the send is silently skipped and a result with `"user opted out"` is returned.
+
+### Preference store interface
+
+```go
+type Store interface {
+    GetPreference(ctx context.Context, appID string, userID string) (*Preference, error)
+    SetPreference(ctx context.Context, p *Preference) error
+    DeletePreference(ctx context.Context, appID string, userID string) error
+}
+```
+
+---
+
+## Scoped Config
+
+**Package:** `github.com/xraph/herald/scope`
+**ID prefix:** `hscf_`
+
+A `Config` (scoped configuration) defines per-scope provider and sender overrides. Scoped configs allow different parts of your application (app-wide, per-organization, per-user) to use different providers and sender addresses.
+
+```go
+type Config struct {
+    ID              id.ScopedConfigID `json:"id"`
+    AppID           string            `json:"app_id"`
+    Scope           ScopeType         `json:"scope"`
+    ScopeID         string            `json:"scope_id"`
+    EmailProviderID string            `json:"email_provider_id,omitempty"`
+    SMSProviderID   string            `json:"sms_provider_id,omitempty"`
+    PushProviderID  string            `json:"push_provider_id,omitempty"`
+    FromEmail       string            `json:"from_email,omitempty"`
+    FromName        string            `json:"from_name,omitempty"`
+    FromPhone       string            `json:"from_phone,omitempty"`
+    DefaultLocale   string            `json:"default_locale,omitempty"`
+    CreatedAt       time.Time         `json:"created_at"`
+    UpdatedAt       time.Time         `json:"updated_at"`
+}
+```
+
+### Scope types
+
+```go
+const (
+    ScopeApp  ScopeType = "app"
+    ScopeOrg  ScopeType = "org"
+    ScopeUser ScopeType = "user"
+)
+```
+
+| Field | Description |
+|-------|-------------|
+| `Scope` | The level at which this config applies: `"app"`, `"org"`, or `"user"`. |
+| `ScopeID` | The identifier for this scope (app ID, org ID, or user ID). |
+| `EmailProviderID` | Override provider for the email channel. |
+| `SMSProviderID` | Override provider for the SMS channel. |
+| `PushProviderID` | Override provider for the push channel. |
+| `FromEmail` | Override sender email address. |
+| `FromName` | Override sender display name. |
+| `FromPhone` | Override sender phone number (SMS). |
+| `DefaultLocale` | Override default locale for template rendering. |
+
+The `ProviderIDFor` method returns the provider ID override for a given channel:
+
+```go
+func (c *Config) ProviderIDFor(channel string) string
+```
+
+### Scoped config store interface
+
+```go
+type Store interface {
+    GetScopedConfig(ctx context.Context, appID string, scopeType ScopeType, scopeID string) (*Config, error)
+    SetScopedConfig(ctx context.Context, cfg *Config) error
+    DeleteScopedConfig(ctx context.Context, configID id.ScopedConfigID) error
+    ListScopedConfigs(ctx context.Context, appID string) ([]*Config, error)
+}
+```

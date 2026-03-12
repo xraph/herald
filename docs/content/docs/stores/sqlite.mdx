@@ -1,0 +1,183 @@
+---
+title: SQLite Store
+description: Lightweight SQLite backend using Grove ORM with sqlitedriver.
+---
+
+The SQLite store (`herald/store/sqlite`) provides a lightweight backend for Herald using [Grove ORM](https://github.com/xraph/grove) with `sqlitedriver`. It creates the same 7 tables as the PostgreSQL store but uses SQLite-native types: `TEXT` for JSON data, `INTEGER` for booleans, and `datetime('now')` for timestamp defaults.
+
+## Installation
+
+```bash
+go get github.com/xraph/herald
+go get github.com/xraph/grove
+go get github.com/xraph/grove/drivers/sqlitedriver
+```
+
+## Creating a Store
+
+```go
+import (
+    "github.com/xraph/grove"
+    "github.com/xraph/grove/drivers/sqlitedriver"
+    "github.com/xraph/herald/store/sqlite"
+)
+
+// Open a SQLite connection via Grove.
+db := grove.Open(sqlitedriver.New(
+    sqlitedriver.WithDSN("file:herald.db?_journal=WAL"),
+))
+
+// Create the Herald store.
+store := sqlite.New(db)
+
+// Run migrations.
+if err := store.Migrate(ctx); err != nil {
+    log.Fatal("migration failed:", err)
+}
+```
+
+## Constructor
+
+```go
+func New(db *grove.DB) *Store
+```
+
+`New` accepts a `*grove.DB` backed by `sqlitedriver` and returns a `*Store` that satisfies the `store.Store` interface. Internally it calls `sqlitedriver.Unwrap(db)` to access the SQLite-specific query builder.
+
+## Tables
+
+The store creates the same 7 tables as PostgreSQL, with SQLite-appropriate type adaptations.
+
+### Type Differences from PostgreSQL
+
+| PostgreSQL | SQLite | Notes |
+|------------|--------|-------|
+| `JSONB NOT NULL DEFAULT '{}'` | `TEXT NOT NULL DEFAULT '{}'` | JSON stored as text strings |
+| `BOOLEAN NOT NULL DEFAULT TRUE` | `INTEGER NOT NULL DEFAULT 1` | `1`/`0` for booleans |
+| `TIMESTAMPTZ NOT NULL DEFAULT NOW()` | `TEXT NOT NULL DEFAULT (datetime('now'))` | ISO 8601 text timestamps |
+| `REFERENCES ... ON DELETE CASCADE` | Not used | FK support is optional in SQLite |
+
+### Tables Created
+
+| Table | Entity | Primary Key Prefix |
+|-------|--------|--------------------|
+| `herald_providers` | Provider configuration | `hpvd_` |
+| `herald_templates` | Template definitions | `htpl_` |
+| `herald_template_versions` | Locale-specific content | `htpv_` |
+| `herald_messages` | Delivery log | `hmsg_` |
+| `herald_inbox` | In-app notifications | `hinb_` |
+| `herald_preferences` | User preferences | `hprf_` |
+| `herald_scoped_configs` | Scoped provider overrides | `hscf_` |
+
+### Indexes and Constraints
+
+All tables share the same index and unique constraint definitions as PostgreSQL:
+
+- `herald_providers`: index on `(app_id, channel)`
+- `herald_templates`: unique on `(app_id, slug, channel)`
+- `herald_template_versions`: unique on `(template_id, locale)`
+- `herald_messages`: indexes on `(app_id, status)` and `(created_at DESC)`
+- `herald_inbox`: indexes on `(user_id, read, created_at DESC)` and `(app_id, user_id)`
+- `herald_preferences`: unique on `(app_id, user_id)`
+- `herald_scoped_configs`: unique on `(app_id, scope, scope_id)`
+
+## JSON Handling
+
+Since SQLite lacks a native JSONB type, the SQLite store models use `string` fields instead of `map[string]string` and marshal/unmarshal JSON manually:
+
+```go
+// PostgreSQL model:
+Credentials map[string]string `grove:"credentials,type:jsonb"`
+
+// SQLite model:
+Credentials string `grove:"credentials"` // JSON text
+```
+
+The `toXxxModel` and `fromXxxModel` converters handle the JSON serialization transparently.
+
+## UPSERT Patterns
+
+SQLite supports the same `ON CONFLICT` upsert syntax as PostgreSQL:
+
+```go
+_, err := s.sdb.NewInsert(m).
+    OnConflict("(app_id, user_id) DO UPDATE").
+    Set("overrides = EXCLUDED.overrides").
+    Set("updated_at = EXCLUDED.updated_at").
+    Exec(ctx)
+```
+
+## Template Deletion
+
+Because SQLite foreign key support is optional and may not be enabled, the SQLite store explicitly deletes template versions before deleting a template:
+
+```go
+func (s *Store) DeleteTemplate(ctx context.Context, templateID id.TemplateID) error {
+    // Delete versions first (SQLite FK support is optional)
+    _, _ = s.sdb.NewDelete((*templateVersionModel)(nil)).
+        Where("template_id = ?", templateID.String()).
+        Exec(ctx)
+    // Then delete the template
+    // ...
+}
+```
+
+## Lifecycle Methods
+
+| Method | Behaviour |
+|--------|-----------|
+| `Migrate(ctx)` | Creates all 7 tables and indexes via Grove's migration orchestrator |
+| `Ping(ctx)` | Calls `db.Ping(ctx)` to verify database connectivity |
+| `Close()` | Calls `db.Close()` to release the database connection |
+
+## Connection Setup Example
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+
+    "github.com/xraph/grove"
+    "github.com/xraph/grove/drivers/sqlitedriver"
+    "github.com/xraph/herald"
+    "github.com/xraph/herald/store/sqlite"
+)
+
+func main() {
+    ctx := context.Background()
+
+    db := grove.Open(sqlitedriver.New(
+        sqlitedriver.WithDSN("file:herald.db?_journal=WAL&_busy_timeout=5000"),
+    ))
+
+    store := sqlite.New(db)
+    if err := store.Migrate(ctx); err != nil {
+        log.Fatal("migrate:", err)
+    }
+
+    h, err := herald.New(
+        herald.WithStore(store),
+    )
+    if err != nil {
+        log.Fatal("herald:", err)
+    }
+    defer store.Close()
+
+    _ = h
+}
+```
+
+## When to Use
+
+- **Development and testing** -- zero-dependency, file-based database with no server required.
+- **Single-node deployments** -- embedded applications, CLI tools, or self-contained services.
+- **CI/CD pipelines** -- fast, disposable database for integration tests.
+- **Prototyping** -- get started immediately without database infrastructure.
+
+## Limitations
+
+- **Single-writer concurrency** -- SQLite uses file-level locking. WAL mode helps but is not suitable for high-concurrency write workloads.
+- **No native JSONB** -- JSON stored as text, so JSON path queries are not supported at the database level.
+- **No cascading deletes** -- foreign key enforcement is optional; the store handles cascades manually.

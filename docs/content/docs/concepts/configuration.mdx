@@ -1,0 +1,226 @@
+---
+title: Configuration
+description: Configuring a Herald instance and the Forge extension.
+---
+
+Herald can run standalone or as a Forge extension. Both modes share the same core `Config` struct, with the extension adding route and migration options on top.
+
+## herald.Config
+
+**Import:** `github.com/xraph/herald`
+
+The root `Config` struct controls core notification delivery behavior:
+
+```go
+type Config struct {
+    // DefaultLocale is the default locale for template rendering (default: "en").
+    DefaultLocale string
+
+    // MaxBatchSize is the maximum number of notifications per batch send.
+    MaxBatchSize int
+
+    // TruncateBodyAt is the maximum message body length stored in the delivery log.
+    // Bodies longer than this are truncated. 0 means no truncation.
+    TruncateBodyAt int
+}
+```
+
+### Field reference
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `DefaultLocale` | `string` | `"en"` | BCP 47 locale tag used when a `SendRequest` does not specify a locale. |
+| `MaxBatchSize` | `int` | `100` | Maximum recipients per batch send via `Herald.Notify`. |
+| `TruncateBodyAt` | `int` | `4096` | Maximum character length for the `Body` field in delivery log messages. Set to `0` to disable truncation. |
+
+### DefaultConfig
+
+`DefaultConfig()` returns a `Config` with sensible defaults:
+
+```go
+cfg := herald.DefaultConfig()
+// cfg.DefaultLocale  = "en"
+// cfg.MaxBatchSize   = 100
+// cfg.TruncateBodyAt = 4096
+```
+
+## Option functions
+
+Herald uses the functional options pattern. `Option` is a function type that configures a `Herald` instance:
+
+```go
+type Option func(*Herald) error
+```
+
+Options are passed to the `herald.New` constructor:
+
+```go
+h, err := herald.New(
+    herald.WithStore(myStore),
+    herald.WithDefaultLocale("fr"),
+    herald.WithMaxBatchSize(50),
+    herald.WithDriver(&email.SMTPDriver{}),
+    herald.WithLogger(slog.Default()),
+)
+```
+
+### Available options
+
+| Option | Description |
+|--------|-------------|
+| `WithStore(s store.Store)` | Sets the persistence backend. **Required** -- Herald returns `ErrNoStore` without it. |
+| `WithLogger(l *slog.Logger)` | Sets the structured logger. Defaults to `slog.Default()`. |
+| `WithDriver(d driver.Driver)` | Registers a notification driver (SMTP, Twilio, FCM, etc.). Can be called multiple times. |
+| `WithDefaultLocale(locale string)` | Overrides the default locale for template rendering. |
+| `WithMaxBatchSize(n int)` | Overrides the maximum batch size. |
+
+### Minimal standalone setup
+
+```go
+import (
+    "log/slog"
+
+    "github.com/xraph/herald"
+    "github.com/xraph/herald/driver/email"
+    "github.com/xraph/herald/store/memory"
+)
+
+h, err := herald.New(
+    herald.WithStore(memory.New()),
+    herald.WithDriver(&email.SMTPDriver{}),
+)
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+## Extension configuration
+
+**Import:** `github.com/xraph/herald/extension`
+
+When running as a Forge extension, Herald wraps the core config with additional fields for route registration, migration control, and Grove database integration.
+
+### extension.Config
+
+```go
+type Config struct {
+    herald.Config `json:",inline" yaml:",inline" mapstructure:",squash"`
+
+    // BasePath is the URL prefix for all herald routes (default: "/herald").
+    BasePath string `json:"base_path" yaml:"base_path" mapstructure:"base_path"`
+
+    // DisableRoutes disables automatic route registration with the Forge router.
+    DisableRoutes bool `json:"disable_routes" yaml:"disable_routes" mapstructure:"disable_routes"`
+
+    // DisableMigrate disables automatic database migration on Register.
+    DisableMigrate bool `json:"disable_migrate" yaml:"disable_migrate" mapstructure:"disable_migrate"`
+
+    // GroveDatabase is the name of a grove.DB registered in the DI container.
+    GroveDatabase string `json:"grove_database" yaml:"grove_database" mapstructure:"grove_database"`
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `BasePath` | `string` | `"/herald"` | URL prefix for all Herald API routes. |
+| `DisableRoutes` | `bool` | `false` | When `true`, the extension does not register routes automatically. |
+| `DisableMigrate` | `bool` | `false` | When `true`, the extension skips automatic schema migration. |
+| `GroveDatabase` | `string` | `""` | Name of the Grove database in the DI container. Empty uses the default unnamed DB. |
+
+### Extension options
+
+```go
+ext := extension.New(
+    extension.WithGroveDatabase("primary"),
+    extension.WithBasePath("/notifications"),
+    extension.WithDisableRoutes(),
+    extension.WithDisableMigrate(),
+    extension.WithDriver(&sms.TwilioDriver{}),
+)
+```
+
+| ExtOption | Description |
+|-----------|-------------|
+| `WithStore(s store.Store)` | Sets the persistence backend directly (bypasses Grove auto-detection). |
+| `WithBasePath(path string)` | Sets the URL prefix for Herald API routes. |
+| `WithConfig(cfg Config)` | Sets the full extension configuration. |
+| `WithHeraldOption(opt herald.Option)` | Passes a raw `herald.Option` through to the core engine. |
+| `WithDriver(d driver.Driver)` | Registers a notification driver. |
+| `WithDisableRoutes()` | Disables automatic route registration. |
+| `WithDisableMigrate()` | Disables automatic schema migration. |
+| `WithRequireConfig(bool)` | Requires config to be present in YAML files (errors if missing). |
+| `WithGroveDatabase(name string)` | Sets the Grove database name for auto-detection of the store backend. |
+
+### YAML configuration
+
+The extension loads configuration from Forge YAML config files. It checks two keys in order:
+
+1. `extensions.herald` (namespaced, preferred)
+2. `herald` (legacy)
+
+```yaml
+# config.yaml
+extensions:
+  herald:
+    default_locale: "en"
+    max_batch_size: 100
+    truncate_body_at: 4096
+    base_path: "/herald"
+    disable_routes: false
+    disable_migrate: false
+    grove_database: "primary"
+```
+
+YAML configuration takes precedence over programmatic defaults. Programmatic boolean flags (`DisableRoutes`, `DisableMigrate`) override YAML when set to `true`.
+
+### Grove auto-detection
+
+When `GroveDatabase` is set (via YAML or `WithGroveDatabase`), the extension resolves a `*grove.DB` from the Forge DI container and auto-constructs the appropriate store backend based on the Grove driver type:
+
+| Grove driver | Store backend |
+|--------------|---------------|
+| `pg` | `store/postgres.Store` |
+| `sqlite` | `store/sqlite.Store` |
+| `mongo` | `store/mongo.Store` |
+
+```go
+// The extension does this internally:
+switch db.Driver().Name() {
+case "pg":
+    return pgstore.New(db), nil
+case "sqlite":
+    return sqlitestore.New(db), nil
+case "mongo":
+    return mongostore.New(db), nil
+}
+```
+
+### Built-in drivers
+
+The Forge extension automatically registers all built-in drivers during `Init`:
+
+- `email.SMTPDriver` -- SMTP email delivery
+- `email.ResendDriver` -- Resend API email delivery
+- `sms.TwilioDriver` -- Twilio SMS delivery
+- `push.FCMDriver` -- Firebase Cloud Messaging push notifications
+- `inapp.Driver` -- In-app inbox notifications
+
+You only need to call `WithDriver` for custom or third-party drivers.
+
+## Accessing the Herald instance
+
+After extension registration, the `*herald.Herald` instance is available from the Forge DI container:
+
+```go
+import "github.com/xraph/vessel"
+
+h, err := vessel.Inject[*herald.Herald](app.Container())
+```
+
+Or directly from the extension:
+
+```go
+ext.Herald() // *herald.Herald (nil until Register is called)
+ext.API()    // *api.ForgeAPI
+ext.Config() // herald.Config
+```

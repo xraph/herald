@@ -1,0 +1,273 @@
+---
+title: Scoped Configuration
+description: Configure per-scope provider overrides, sender info, and default locale through Herald's resolution chain.
+---
+
+Herald's scoped configuration system allows notification settings to be customized at three levels: **App**, **Org** (organization), and **User**. Each scope can override which provider handles a channel, what sender information is used, and what default locale applies. The resolver walks the scope chain from most specific to least specific to determine the final configuration.
+
+## Resolution Chain
+
+When Herald needs to resolve a provider for a notification, the scope resolver checks these levels in order:
+
+```
+User -> Org -> App -> Priority-based fallback
+```
+
+The first scope that has a provider override for the requested channel wins. If no scoped configuration exists at any level, Herald falls back to selecting the highest-priority enabled provider for that channel.
+
+```go
+func (r *Resolver) ResolveProvider(
+    ctx context.Context,
+    appID, orgID, userID string,
+    channel string,
+) (*ResolveResult, error) {
+    // 1. User-scoped override
+    if userID != "" {
+        if result := r.tryScope(ctx, appID, ScopeUser, userID, channel); result != nil {
+            return result, nil
+        }
+    }
+
+    // 2. Org-scoped override
+    if orgID != "" {
+        if result := r.tryScope(ctx, appID, ScopeOrg, orgID, channel); result != nil {
+            return result, nil
+        }
+    }
+
+    // 3. App-scoped default
+    if result := r.tryScope(ctx, appID, ScopeApp, appID, channel); result != nil {
+        return result, nil
+    }
+
+    // 4. Fallback: first enabled provider sorted by priority
+    providers, _ := r.providerStore.ListProviders(ctx, appID, channel)
+    // ... sort by priority, return first enabled
+}
+```
+
+## Config Entity
+
+The `scope.Config` struct represents a scoped configuration record:
+
+```go
+type Config struct {
+    ID              id.ScopedConfigID `json:"id"`
+    AppID           string            `json:"app_id"`
+    Scope           ScopeType         `json:"scope"`           // "app", "org", "user"
+    ScopeID         string            `json:"scope_id"`        // the app/org/user ID
+    EmailProviderID string            `json:"email_provider_id,omitempty"`
+    SMSProviderID   string            `json:"sms_provider_id,omitempty"`
+    PushProviderID  string            `json:"push_provider_id,omitempty"`
+    FromEmail       string            `json:"from_email,omitempty"`
+    FromName        string            `json:"from_name,omitempty"`
+    FromPhone       string            `json:"from_phone,omitempty"`
+    DefaultLocale   string            `json:"default_locale,omitempty"`
+    CreatedAt       time.Time         `json:"created_at"`
+    UpdatedAt       time.Time         `json:"updated_at"`
+}
+```
+
+Scoped config IDs use the `hscf` prefix.
+
+## Scope Types
+
+```go
+const (
+    ScopeApp  ScopeType = "app"
+    ScopeOrg  ScopeType = "org"
+    ScopeUser ScopeType = "user"
+)
+```
+
+| Scope | ScopeID | Description |
+|-------|---------|-------------|
+| `app` | Application ID | Application-wide defaults |
+| `org` | Organization ID | Per-organization overrides |
+| `user` | User ID | Per-user overrides |
+
+## Per-Scope Provider Overrides
+
+Each scope can override which provider handles a given channel by setting the corresponding provider ID field:
+
+```go
+// App-level: use Resend for email, Twilio for SMS
+appConfig := &scope.Config{
+    AppID:           "app_01abc...",
+    Scope:           scope.ScopeApp,
+    ScopeID:         "app_01abc...",
+    EmailProviderID: "hpvd_01resend...",
+    SMSProviderID:   "hpvd_01twilio...",
+}
+
+// Org-level: Acme Corp uses their own SMTP server
+orgConfig := &scope.Config{
+    AppID:           "app_01abc...",
+    Scope:           scope.ScopeOrg,
+    ScopeID:         "org_01acme...",
+    EmailProviderID: "hpvd_01smtp...",
+}
+```
+
+With this configuration:
+- Users in Acme Corp have their emails sent via SMTP (org override)
+- All other users have their emails sent via Resend (app default)
+- SMS goes through Twilio for everyone (app default, no org override for SMS)
+
+The `ProviderIDFor` method extracts the right provider ID for a given channel:
+
+```go
+func (c *Config) ProviderIDFor(channel string) string {
+    switch channel {
+    case "email":
+        return c.EmailProviderID
+    case "sms":
+        return c.SMSProviderID
+    case "push":
+        return c.PushProviderID
+    default:
+        return ""
+    }
+}
+```
+
+## Sender Info Overrides
+
+Scoped configurations can override the sender details used when delivering notifications:
+
+| Field | Description | Used By |
+|-------|-------------|---------|
+| `FromEmail` | Sender email address | Email channel |
+| `FromName` | Sender display name | Email channel |
+| `FromPhone` | Sender phone number | SMS channel |
+
+During delivery, Herald applies sender info from the resolved scoped config:
+
+```go
+if resolved.Config != nil {
+    outbound.From = resolved.Config.FromEmail
+    outbound.FromName = resolved.Config.FromName
+    if channel == "sms" {
+        outbound.From = resolved.Config.FromPhone
+    }
+}
+// Fallback to provider settings
+if outbound.From == "" {
+    outbound.From = prov.Settings["from"]
+}
+```
+
+This allows different organizations or users to have their own branded sender identities:
+
+```go
+// Acme Corp sends from their own domain
+orgConfig := &scope.Config{
+    AppID:     "app_01abc...",
+    Scope:     scope.ScopeOrg,
+    ScopeID:   "org_01acme...",
+    FromEmail: "notifications@acme.com",
+    FromName:  "Acme Corp",
+    FromPhone: "+15559876543",
+}
+```
+
+## Default Locale
+
+Each scope can set a `DefaultLocale` that influences which template version is rendered:
+
+```go
+appConfig := &scope.Config{
+    AppID:         "app_01abc...",
+    Scope:         scope.ScopeApp,
+    ScopeID:       "app_01abc...",
+    DefaultLocale: "en",
+}
+
+orgConfig := &scope.Config{
+    AppID:         "app_01abc...",
+    Scope:         scope.ScopeOrg,
+    ScopeID:       "org_01fr...",
+    DefaultLocale: "fr",
+}
+```
+
+When sending a notification, the locale is resolved in this order:
+1. Explicit `Locale` field on the send request
+2. Scoped config `DefaultLocale` from the resolved scope
+3. Herald's global `DefaultLocale` (default: `"en"`)
+
+## Store Interface
+
+```go
+type Store interface {
+    GetScopedConfig(ctx context.Context, appID string, scopeType ScopeType, scopeID string) (*Config, error)
+    SetScopedConfig(ctx context.Context, cfg *Config) error
+    DeleteScopedConfig(ctx context.Context, configID id.ScopedConfigID) error
+    ListScopedConfigs(ctx context.Context, appID string) ([]*Config, error)
+}
+```
+
+`SetScopedConfig` uses upsert semantics -- if a config already exists for the `(app_id, scope, scope_id)` combination, it is replaced.
+
+## API Endpoints
+
+Scoped configuration is managed through the `/config` route group:
+
+| Method | Path | Operation |
+|--------|------|-----------|
+| `GET` | `/config` | List all scoped configs for an app |
+| `PUT` | `/config/app` | Set app-level config |
+| `PUT` | `/config/org/:orgId` | Set org-level config |
+| `PUT` | `/config/user/:userId` | Set user-level config |
+| `DELETE` | `/config/org/:orgId` | Delete org-level config |
+| `DELETE` | `/config/user/:userId` | Delete user-level config |
+
+### Set App Config Example
+
+```json
+{
+  "app_id": "app_01abc...",
+  "email_provider_id": "hpvd_01resend...",
+  "sms_provider_id": "hpvd_01twilio...",
+  "push_provider_id": "hpvd_01fcm...",
+  "from_email": "noreply@myapp.com",
+  "from_name": "MyApp Notifications",
+  "from_phone": "+15551234567",
+  "default_locale": "en"
+}
+```
+
+### Set Org Config Example
+
+```
+PUT /herald/config/org/org_01acme...
+```
+
+```json
+{
+  "app_id": "app_01abc...",
+  "email_provider_id": "hpvd_01smtp...",
+  "from_email": "notifications@acme.com",
+  "from_name": "Acme Corp"
+}
+```
+
+Only the fields you set are used as overrides. Empty string fields are ignored during resolution (the resolver falls through to the next scope level or provider defaults).
+
+## Resolution Example
+
+Consider an application with the following scoped configurations:
+
+| Scope | ScopeID | Email Provider | FromEmail |
+|-------|---------|---------------|-----------|
+| App | `app_01abc` | Resend (`hpvd_01resend`) | `noreply@myapp.com` |
+| Org | `org_01acme` | SMTP (`hpvd_01smtp`) | `hello@acme.com` |
+| User | `user_01alice` | *(none)* | `alice@acme.com` |
+
+When sending an email to Alice (who belongs to Acme Corp):
+
+1. **User scope** (`user_01alice`): No email provider override, so continue
+2. **Org scope** (`org_01acme`): Email provider = SMTP. Resolution stops here
+3. The resolved provider is SMTP, and the config carries `FromEmail: "hello@acme.com"`
+
+If the user scope had an `EmailProviderID` set, that would have been used instead. The resolver always returns the first match in the chain.

@@ -1,0 +1,202 @@
+---
+title: Inbox
+description: Manage in-app notifications with read/unread tracking, pagination, metadata, and action URLs.
+---
+
+Herald's inbox subsystem provides a persistent store for in-app notifications. When a notification is sent on the `inapp` channel, Herald automatically creates an inbox entry for the target user. The inbox supports read/unread management, pagination, metadata, expiration, and action URLs.
+
+## Notification Entity
+
+The `inbox.Notification` struct represents a single in-app notification:
+
+```go
+type Notification struct {
+    ID        id.InboxID        `json:"id"`
+    AppID     string            `json:"app_id"`
+    EnvID     string            `json:"env_id,omitempty"`
+    UserID    string            `json:"user_id"`
+    Type      string            `json:"type"`              // template slug
+    Title     string            `json:"title"`
+    Body      string            `json:"body,omitempty"`
+    ActionURL string            `json:"action_url,omitempty"`
+    ImageURL  string            `json:"image_url,omitempty"`
+    Read      bool              `json:"read"`
+    ReadAt    *time.Time        `json:"read_at,omitempty"`
+    Metadata  map[string]string `json:"metadata,omitempty"`
+    ExpiresAt *time.Time        `json:"expires_at,omitempty"`
+    CreatedAt time.Time         `json:"created_at"`
+}
+```
+
+Notification IDs use the `hinb` prefix (e.g., `hinb_01j8x7k2...`).
+
+## Automatic Creation
+
+Inbox notifications are created automatically during the [delivery pipeline](/docs/subsystems/delivery) when the channel is `inapp` and a `UserID` is provided:
+
+```go
+// Inside Herald.Send(), after the inapp driver returns success:
+if channel == string(ChannelInApp) && req.UserID != "" {
+    _ = h.store.CreateNotification(ctx, &inbox.Notification{
+        ID:        id.NewInboxID(),
+        AppID:     req.AppID,
+        EnvID:     req.EnvID,
+        UserID:    req.UserID,
+        Type:      req.Template,
+        Title:     rendered.Title,
+        Body:      rendered.Text,
+        Metadata:  req.Metadata,
+        CreatedAt: time.Now().UTC(),
+    })
+}
+```
+
+The `Type` field is set to the template slug, making it easy to filter and identify notification types in the inbox.
+
+## Read/Unread Management
+
+Notifications start in an unread state (`Read: false`). Herald provides operations to mark individual or all notifications as read.
+
+### Mark Single Notification as Read
+
+```go
+err := store.MarkRead(ctx, notifID)
+```
+
+This sets `Read` to `true` and records the current time in `ReadAt`.
+
+### Mark All Read
+
+```go
+err := store.MarkAllRead(ctx, appID, userID)
+```
+
+Marks every unread notification for the given user and application as read in a single operation.
+
+### Unread Count
+
+```go
+count, err := store.UnreadCount(ctx, appID, userID)
+```
+
+Returns the number of unread notifications. This is useful for displaying a badge count in your application UI.
+
+## Pagination
+
+Inbox notifications are listed with limit/offset pagination:
+
+```go
+notifications, err := store.ListNotifications(ctx, appID, userID, limit, offset)
+```
+
+Notifications are returned ordered by creation time (newest first). The default page size when using the API is 50.
+
+## Metadata and Action URLs
+
+### Metadata
+
+The `Metadata` field carries arbitrary key-value pairs passed from the send request. Use this for application-specific context like linking to specific resources:
+
+```go
+result, err := h.Send(ctx, &herald.SendRequest{
+    AppID:    "app_01abc...",
+    Channel:  "inapp",
+    Template: "auth.invitation",
+    UserID:   "user_01xyz...",
+    To:       []string{"user_01xyz..."},
+    Data: map[string]any{
+        "inviter_name": "Bob",
+        "org_name":     "Acme Corp",
+        "role":         "admin",
+    },
+    Metadata: map[string]string{
+        "org_id":        "org_01abc...",
+        "invitation_id": "inv_01def...",
+    },
+})
+```
+
+### Action URL
+
+The `ActionURL` field provides a deep link or URL that the user can follow when interacting with the notification (e.g., clicking "Accept Invitation"):
+
+```go
+notification := &inbox.Notification{
+    // ...
+    ActionURL: "/invitations/inv_01def.../accept",
+}
+```
+
+### Image URL
+
+The `ImageURL` field optionally provides an avatar or icon image to display alongside the notification.
+
+## Expiration
+
+The optional `ExpiresAt` field allows notifications to carry an expiry time. Your application can filter out expired notifications at read time.
+
+## Store Interface
+
+The `inbox.Store` interface defines all inbox persistence operations:
+
+```go
+type Store interface {
+    CreateNotification(ctx context.Context, n *Notification) error
+    GetNotification(ctx context.Context, notifID id.InboxID) (*Notification, error)
+    DeleteNotification(ctx context.Context, notifID id.InboxID) error
+    MarkRead(ctx context.Context, notifID id.InboxID) error
+    MarkAllRead(ctx context.Context, appID string, userID string) error
+    UnreadCount(ctx context.Context, appID string, userID string) (int, error)
+    ListNotifications(ctx context.Context, appID string, userID string, limit, offset int) ([]*Notification, error)
+}
+```
+
+## API Endpoints
+
+The inbox is managed through the `/inbox` route group:
+
+| Method | Path | Operation |
+|--------|------|-----------|
+| `GET` | `/inbox` | List inbox notifications (query: `app_id`, `user_id`, `limit`, `offset`) |
+| `GET` | `/inbox/unread/count` | Get unread count (query: `app_id`, `user_id`) |
+| `PUT` | `/inbox/:id/read` | Mark a single notification as read |
+| `PUT` | `/inbox/read-all` | Mark all notifications as read (query: `app_id`, `user_id`) |
+| `DELETE` | `/inbox/:id` | Delete a notification |
+
+### Unread Count Response
+
+```json
+{
+  "count": 3
+}
+```
+
+### List Inbox Example
+
+```
+GET /herald/inbox?app_id=app_01abc...&user_id=user_01xyz...&limit=20&offset=0
+```
+
+Returns an array of `Notification` objects ordered by `created_at` descending.
+
+## Using the Inbox with Notify
+
+The most common pattern is to include `"inapp"` in the channels list of a `Notify` call so the user receives both an external notification and an inbox entry:
+
+```go
+results, err := h.Notify(ctx, &herald.NotifyRequest{
+    AppID:    "app_01abc...",
+    Template: "auth.new-device-login",
+    Channels: []string{"email", "inapp"},
+    UserID:   "user_01xyz...",
+    To:       []string{"alice@example.com"},
+    Data: map[string]any{
+        "user_name":   "Alice",
+        "app_name":    "MyApp",
+        "device_info": "Chrome on macOS",
+        "location":    "San Francisco, CA",
+    },
+})
+```
+
+This sends the email through the configured email provider and simultaneously creates an inbox notification for the user.

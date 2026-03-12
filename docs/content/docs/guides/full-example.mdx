@@ -1,0 +1,478 @@
+---
+title: Full Example
+description: Complete working example covering store setup, provider creation, template rendering, and notification delivery.
+---
+
+This guide demonstrates all key Herald features working together in a single, runnable Go program: store initialization, provider registration, template creation with locale-specific versions, notification delivery with scope resolution, user preferences, and in-app notifications. Both standalone and Forge extension usage patterns are shown.
+
+## Standalone Example
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "time"
+
+    "github.com/xraph/herald"
+    "github.com/xraph/herald/driver/email"
+    "github.com/xraph/herald/driver/inapp"
+    "github.com/xraph/herald/id"
+    "github.com/xraph/herald/inbox"
+    "github.com/xraph/herald/message"
+    "github.com/xraph/herald/preference"
+    "github.com/xraph/herald/provider"
+    "github.com/xraph/herald/scope"
+    "github.com/xraph/herald/store/memory"
+    "github.com/xraph/herald/template"
+)
+
+func main() {
+    ctx := context.Background()
+
+    // ─── 1. Create the store and Herald instance ──────────
+    store := memory.New()
+    _ = store.Migrate(ctx) // no-op for memory store
+
+    h, err := herald.New(
+        herald.WithStore(store),
+        herald.WithDriver(&email.SMTPDriver{}),
+        herald.WithDriver(&inapp.Driver{}),
+        herald.WithDefaultLocale("en"),
+    )
+    if err != nil {
+        log.Fatal("herald:", err)
+    }
+
+    // ─── 2. Create an email provider ─────────────────────
+    now := time.Now().UTC()
+    emailProvider := &provider.Provider{
+        ID:      id.NewProviderID(),
+        AppID:   "myapp",
+        Name:    "SMTP Production",
+        Channel: "email",
+        Driver:  "smtp",
+        Credentials: map[string]string{
+            "host":     "smtp.example.com",
+            "port":     "587",
+            "username": "noreply@example.com",
+            "password": "secret",
+        },
+        Settings: map[string]string{
+            "from":      "noreply@example.com",
+            "from_name": "My App",
+        },
+        Priority:  0,
+        Enabled:   true,
+        CreatedAt: now,
+        UpdatedAt: now,
+    }
+    if err := store.CreateProvider(ctx, emailProvider); err != nil {
+        log.Fatal("create provider:", err)
+    }
+    fmt.Printf("[Provider] Created: %s (%s)\n", emailProvider.Name, emailProvider.ID)
+
+    // Create an in-app provider.
+    inappProvider := &provider.Provider{
+        ID:        id.NewProviderID(),
+        AppID:     "myapp",
+        Name:      "In-App",
+        Channel:   "inapp",
+        Driver:    "inapp",
+        Enabled:   true,
+        CreatedAt: now,
+        UpdatedAt: now,
+    }
+    if err := store.CreateProvider(ctx, inappProvider); err != nil {
+        log.Fatal("create inapp provider:", err)
+    }
+    fmt.Printf("[Provider] Created: %s (%s)\n", inappProvider.Name, inappProvider.ID)
+
+    // ─── 3. Set up app-level scoped configuration ────────
+    appConfig := &scope.Config{
+        ID:              id.NewScopedConfigID(),
+        AppID:           "myapp",
+        Scope:           scope.ScopeApp,
+        ScopeID:         "myapp",
+        EmailProviderID: emailProvider.ID.String(),
+        PushProviderID:  "",
+        FromEmail:       "noreply@example.com",
+        FromName:        "My App",
+        DefaultLocale:   "en",
+        CreatedAt:       now,
+        UpdatedAt:       now,
+    }
+    if err := store.SetScopedConfig(ctx, appConfig); err != nil {
+        log.Fatal("set app config:", err)
+    }
+    fmt.Println("[Config] App-level config set")
+
+    // ─── 4. Create a welcome email template ──────────────
+    tmpl := &template.Template{
+        ID:        id.NewTemplateID(),
+        AppID:     "myapp",
+        Slug:      "welcome",
+        Name:      "Welcome Email",
+        Channel:   "email",
+        Category:  "transactional",
+        Enabled:   true,
+        CreatedAt: now,
+        UpdatedAt: now,
+    }
+    if err := store.CreateTemplate(ctx, tmpl); err != nil {
+        log.Fatal("create template:", err)
+    }
+    fmt.Printf("[Template] Created: %s (%s)\n", tmpl.Name, tmpl.ID)
+
+    // ─── 5. Add locale-specific versions ─────────────────
+    enVersion := &template.Version{
+        ID:         id.NewTemplateVersionID(),
+        TemplateID: tmpl.ID,
+        Locale:     "en",
+        Subject:    "Welcome to {{.app_name}}, {{.name}}!",
+        HTML:       "<h1>Hello {{.name}}</h1><p>Welcome aboard!</p>",
+        Text:       "Hello {{.name}}, Welcome aboard!",
+        Active:     true,
+        CreatedAt:  now,
+        UpdatedAt:  now,
+    }
+    if err := store.CreateVersion(ctx, enVersion); err != nil {
+        log.Fatal("create en version:", err)
+    }
+
+    frVersion := &template.Version{
+        ID:         id.NewTemplateVersionID(),
+        TemplateID: tmpl.ID,
+        Locale:     "fr",
+        Subject:    "Bienvenue sur {{.app_name}}, {{.name}} !",
+        HTML:       "<h1>Bonjour {{.name}}</h1><p>Bienvenue !</p>",
+        Text:       "Bonjour {{.name}}, Bienvenue !",
+        Active:     true,
+        CreatedAt:  now,
+        UpdatedAt:  now,
+    }
+    if err := store.CreateVersion(ctx, frVersion); err != nil {
+        log.Fatal("create fr version:", err)
+    }
+    fmt.Println("[Template] Added 2 versions: en, fr")
+
+    // ─── 6. Send a notification ──────────────────────────
+    result, err := h.Send(ctx, &herald.SendRequest{
+        AppID:    "myapp",
+        Channel:  "email",
+        Template: "welcome",
+        Locale:   "en",
+        To:       []string{"alice@example.com"},
+        Data: map[string]any{
+            "name":     "Alice",
+            "app_name": "My App",
+        },
+        Metadata: map[string]string{
+            "source": "signup",
+        },
+    })
+    if err != nil {
+        log.Fatal("send:", err)
+    }
+    fmt.Printf("[Send] Result: status=%s message_id=%s\n", result.Status, result.MessageID)
+
+    // ─── 7. Check the delivery log ───────────────────────
+    msgs, _ := store.ListMessages(ctx, "myapp", message.ListOptions{Limit: 10})
+    fmt.Printf("[Messages] Total: %d\n", len(msgs))
+    for _, m := range msgs {
+        fmt.Printf("  - %s to=%s status=%s channel=%s\n",
+            m.ID, m.Recipient, m.Status, m.Channel)
+    }
+
+    // ─── 8. User preferences ────────────────────────────
+    pref := &preference.Preference{
+        ID:     id.NewPreferenceID(),
+        AppID:  "myapp",
+        UserID: "user-bob",
+        Overrides: map[string]preference.ChannelPreference{
+            "welcome": {
+                Email: boolPtr(false), // Opt out of welcome emails.
+                Push:  boolPtr(true),
+            },
+        },
+        CreatedAt: now,
+        UpdatedAt: now,
+    }
+    if err := store.SetPreference(ctx, pref); err != nil {
+        log.Fatal("set preference:", err)
+    }
+    fmt.Println("[Preferences] Bob opted out of welcome emails")
+
+    // Sending to Bob will be skipped for the welcome email.
+    bobResult, err := h.Send(ctx, &herald.SendRequest{
+        AppID:    "myapp",
+        UserID:   "user-bob",
+        Channel:  "email",
+        Template: "welcome",
+        To:       []string{"bob@example.com"},
+        Data:     map[string]any{"name": "Bob", "app_name": "My App"},
+    })
+    if err != nil {
+        log.Fatal("send to bob:", err)
+    }
+    fmt.Printf("[Send] Bob result: status=%s error=%q\n", bobResult.Status, bobResult.Error)
+
+    // ─── 9. In-app notification via inbox ────────────────
+    notification := &inbox.Notification{
+        ID:        id.NewInboxID(),
+        AppID:     "myapp",
+        UserID:    "user-alice",
+        Type:      "welcome",
+        Title:     "Welcome aboard!",
+        Body:      "Thanks for signing up.",
+        ActionURL: "/getting-started",
+        CreatedAt: now,
+    }
+    if err := store.CreateNotification(ctx, notification); err != nil {
+        log.Fatal("create notification:", err)
+    }
+
+    count, _ := store.UnreadCount(ctx, "myapp", "user-alice")
+    fmt.Printf("[Inbox] Alice unread count: %d\n", count)
+
+    _ = store.MarkRead(ctx, notification.ID)
+    count, _ = store.UnreadCount(ctx, "myapp", "user-alice")
+    fmt.Printf("[Inbox] After mark read: %d\n", count)
+
+    // ─── 10. Multi-channel notify ────────────────────────
+    results, err := h.Notify(ctx, &herald.NotifyRequest{
+        AppID:    "myapp",
+        Template: "welcome",
+        Locale:   "en",
+        To:       []string{"charlie@example.com"},
+        Channels: []string{"email", "inapp"},
+        UserID:   "user-charlie",
+        Data:     map[string]any{"name": "Charlie", "app_name": "My App"},
+    })
+    if err != nil {
+        log.Fatal("notify:", err)
+    }
+    fmt.Printf("[Notify] Sent across %d channels\n", len(results))
+    for _, r := range results {
+        fmt.Printf("  - status=%s provider=%s\n", r.Status, r.ProviderID)
+    }
+
+    fmt.Println("\nAll features demonstrated successfully.")
+
+    _ = h
+}
+
+func boolPtr(b bool) *bool { return &b }
+```
+
+## Expected Output
+
+```
+[Provider] Created: SMTP Production (hpvd_...)
+[Provider] Created: In-App (hpvd_...)
+[Config] App-level config set
+[Template] Created: Welcome Email (htpl_...)
+[Template] Added 2 versions: en, fr
+[Send] Result: status=sent message_id=hmsg_...
+[Messages] Total: 1
+  - hmsg_... to=alice@example.com status=sent channel=email
+[Preferences] Bob opted out of welcome emails
+[Send] Bob result: status=sent error="user opted out"
+[Inbox] Alice unread count: 1
+[Inbox] After mark read: 0
+[Notify] Sent across 2 channels
+  - status=sent provider=...
+  - status=sent provider=...
+
+All features demonstrated successfully.
+```
+
+## Forge Extension Example
+
+The same workflow using Herald as a Forge extension:
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "time"
+
+    "github.com/xraph/forge"
+    "github.com/xraph/grove"
+    groveext "github.com/xraph/grove/extension"
+    "github.com/xraph/grove/drivers/pgdriver"
+    "github.com/xraph/vessel"
+
+    "github.com/xraph/herald"
+    heraldext "github.com/xraph/herald/extension"
+    "github.com/xraph/herald/id"
+    "github.com/xraph/herald/provider"
+    "github.com/xraph/herald/scope"
+    "github.com/xraph/herald/template"
+)
+
+func main() {
+    app := forge.New()
+
+    // Register Grove with PostgreSQL.
+    app.Register(groveext.New(
+        groveext.WithDriver(pgdriver.New(
+            pgdriver.WithDSN("postgres://localhost:5432/myapp?sslmode=disable"),
+        )),
+    ))
+
+    // Register Herald extension.
+    app.Register(heraldext.New(
+        heraldext.WithGroveDatabase(""),
+    ))
+
+    // After registration, resolve Herald from the DI container.
+    app.OnStart(func(ctx context.Context) error {
+        h, err := vessel.Inject[*herald.Herald](app.Container())
+        if err != nil {
+            return fmt.Errorf("resolve herald: %w", err)
+        }
+
+        return seedData(ctx, h)
+    })
+
+    app.Run()
+}
+
+func seedData(ctx context.Context, h *herald.Herald) error {
+    store := h.Store()
+    now := time.Now().UTC()
+
+    // Create a provider.
+    p := &provider.Provider{
+        ID:      id.NewProviderID(),
+        AppID:   "myapp",
+        Name:    "SMTP",
+        Channel: "email",
+        Driver:  "smtp",
+        Credentials: map[string]string{
+            "host": "smtp.example.com",
+            "port": "587",
+        },
+        Enabled:   true,
+        CreatedAt: now,
+        UpdatedAt: now,
+    }
+    if err := store.CreateProvider(ctx, p); err != nil {
+        log.Printf("provider may already exist: %v", err)
+    }
+
+    // Set app-level config.
+    cfg := &scope.Config{
+        ID:              id.NewScopedConfigID(),
+        AppID:           "myapp",
+        Scope:           scope.ScopeApp,
+        ScopeID:         "myapp",
+        EmailProviderID: p.ID.String(),
+        FromEmail:       "noreply@example.com",
+        CreatedAt:       now,
+        UpdatedAt:       now,
+    }
+    _ = store.SetScopedConfig(ctx, cfg)
+
+    // Seed default templates.
+    if err := h.SeedDefaultTemplates(ctx, "myapp"); err != nil {
+        log.Printf("seed templates: %v", err)
+    }
+
+    // Create a custom template.
+    tmpl := &template.Template{
+        ID:        id.NewTemplateID(),
+        AppID:     "myapp",
+        Slug:      "order-confirmation",
+        Name:      "Order Confirmation",
+        Channel:   "email",
+        Category:  "transactional",
+        Enabled:   true,
+        CreatedAt: now,
+        UpdatedAt: now,
+    }
+    if err := store.CreateTemplate(ctx, tmpl); err != nil {
+        log.Printf("template may already exist: %v", err)
+    }
+
+    v := &template.Version{
+        ID:         id.NewTemplateVersionID(),
+        TemplateID: tmpl.ID,
+        Locale:     "en",
+        Subject:    "Order #{{.order_id}} confirmed",
+        HTML:       "<h1>Thank you, {{.name}}!</h1><p>Your order #{{.order_id}} has been confirmed.</p>",
+        Text:       "Thank you, {{.name}}! Your order #{{.order_id}} has been confirmed.",
+        Active:     true,
+        CreatedAt:  now,
+        UpdatedAt:  now,
+    }
+    if err := store.CreateVersion(ctx, v); err != nil {
+        log.Printf("version may already exist: %v", err)
+    }
+
+    return nil
+}
+```
+
+## Sending via the HTTP API
+
+Once the Forge extension is running, you can send notifications via the HTTP API:
+
+```bash
+# Send a single notification
+curl -X POST http://localhost:8080/herald/send \
+  -H "Content-Type: application/json" \
+  -d '{
+    "app_id": "myapp",
+    "channel": "email",
+    "template": "order-confirmation",
+    "to": ["alice@example.com"],
+    "data": {
+      "name": "Alice",
+      "order_id": "ORD-12345"
+    }
+  }'
+
+# Multi-channel notify
+curl -X POST http://localhost:8080/herald/notify \
+  -H "Content-Type: application/json" \
+  -d '{
+    "app_id": "myapp",
+    "template": "order-confirmation",
+    "channels": ["email", "inapp"],
+    "user_id": "user-alice",
+    "to": ["alice@example.com"],
+    "data": {
+      "name": "Alice",
+      "order_id": "ORD-12345"
+    }
+  }'
+```
+
+## Feature Summary
+
+| Feature | What was demonstrated |
+|---------|----------------------|
+| **Store setup** | In-memory store for standalone, Grove/PostgreSQL for Forge |
+| **Providers** | SMTP email provider, in-app provider with credentials and settings |
+| **Scoped config** | App-level configuration linking provider to channel |
+| **Templates** | Template with i18n versions (en, fr) |
+| **Send** | Single-channel notification delivery with template rendering |
+| **Notify** | Multi-channel delivery across email and in-app |
+| **Messages** | Delivery log with status tracking |
+| **Preferences** | Per-user opt-out for specific templates and channels |
+| **Inbox** | In-app notifications with read/unread tracking |
+| **Scope resolution** | Automatic provider resolution via scope chain |
+
+## Next Steps
+
+- [Custom Store](/docs/guides/custom-store) -- Implement your own store backend
+- [Multi-Tenant Patterns](/docs/guides/multi-tenant-patterns) -- Per-org providers, per-user locale, scope resolution
+- [Forge Extension](/docs/guides/forge-extension) -- Full Forge lifecycle integration
+- [HTTP API Reference](/docs/api-reference/http-api) -- Complete API endpoint documentation

@@ -1,0 +1,143 @@
+---
+title: Grove ORM Integration
+description: How Herald uses Grove as its ORM layer across all database backends.
+---
+
+Herald uses [Grove ORM](https://github.com/xraph/grove) as its unified database abstraction layer. All three relational and document store backends (PostgreSQL, SQLite, MongoDB) share the same `store.Store` interface, with Grove handling the driver-specific differences under the hood.
+
+## Architecture
+
+Grove provides Herald with:
+
+- **Driver auto-detection** -- The Forge extension detects the Grove driver name (`pg`, `sqlite`, `mongo`) from the connection and constructs the correct store backend automatically.
+- **Migration orchestration** -- Each backend registers versioned migrations via `migrate.NewGroup("herald")`, and Grove's `Orchestrator` handles version tracking, ordering, and execution.
+- **BaseModel embedding** -- All model structs embed `grove.BaseModel` with a `grove:"table:xxx"` tag to declare the backing table or collection.
+- **Struct tag mapping** -- Fields use `grove:"field_name"` tags for column mapping. JSONB columns use `grove:"field,type:jsonb"`. Primary keys use `grove:"id,pk"`.
+
+## Driver Auto-Detection
+
+When Herald runs as a Forge extension with `WithGroveDatabase`, the extension resolves a `*grove.DB` from the DI container and inspects the driver name:
+
+```go
+func (e *Extension) buildStoreFromGroveDB(db *grove.DB) (store.Store, error) {
+    driverName := db.Driver().Name()
+    switch driverName {
+    case "pg":
+        return pgstore.New(db), nil
+    case "sqlite":
+        return sqlitestore.New(db), nil
+    case "mongo":
+        return mongostore.New(db), nil
+    default:
+        return nil, fmt.Errorf("herald: unsupported grove driver %q", driverName)
+    }
+}
+```
+
+You do not need to import individual store packages when using the extension -- the correct backend is selected at runtime.
+
+## Migration System
+
+Herald registers all 7 migrations in a single migration group named `"herald"`. Each backend package exports a `Migrations` variable:
+
+```go
+var Migrations = migrate.NewGroup("herald")
+```
+
+Migrations are registered in `init()` using `Migrations.MustRegister(...)`. Each migration has a unique `Name` and a `Version` string (timestamp-based) that determines execution order:
+
+| Version | Name | Description |
+|---------|------|-------------|
+| `20240201000001` | `create_herald_providers` | Notification provider configuration |
+| `20240201000002` | `create_herald_templates` | Template definitions |
+| `20240201000003` | `create_herald_template_versions` | Locale-specific template content |
+| `20240201000004` | `create_herald_messages` | Delivery log |
+| `20240201000005` | `create_herald_inbox` | In-app notifications |
+| `20240201000006` | `create_herald_preferences` | User notification preferences |
+| `20240201000007` | `create_herald_scoped_configs` | Scoped provider overrides |
+
+For SQL backends (PostgreSQL, SQLite), the `Up` function executes DDL via `exec.Exec(ctx, sql)`. For MongoDB, the `Up` function uses `mongomigrate.Executor` to create collections and indexes.
+
+## Running Migrations
+
+Migrations run automatically when Herald starts as a Forge extension (unless `DisableMigrate` is set). For standalone usage, call `Migrate` explicitly:
+
+```go
+store := postgres.New(db)
+if err := store.Migrate(ctx); err != nil {
+    log.Fatal("migration failed:", err)
+}
+```
+
+The orchestrator tracks applied migrations and skips those already executed, making `Migrate` safe to call on every startup.
+
+## BaseModel and Struct Tags
+
+Every store model embeds `grove.BaseModel` to declare the backing table:
+
+```go
+type providerModel struct {
+    grove.BaseModel `grove:"table:herald_providers"`
+
+    ID          string            `grove:"id,pk"`
+    AppID       string            `grove:"app_id"`
+    Name        string            `grove:"name"`
+    Channel     string            `grove:"channel"`
+    Driver      string            `grove:"driver"`
+    Credentials map[string]string `grove:"credentials,type:jsonb"`
+    Settings    map[string]string `grove:"settings,type:jsonb"`
+    Priority    int               `grove:"priority"`
+    Enabled     bool              `grove:"enabled"`
+    CreatedAt   time.Time         `grove:"created_at"`
+    UpdatedAt   time.Time         `grove:"updated_at"`
+}
+```
+
+### Tag Reference
+
+| Tag | Meaning |
+|-----|---------|
+| `grove:"table:herald_xxx"` | Declares the table/collection name (on `BaseModel`) |
+| `grove:"id,pk"` | Marks the field as the primary key |
+| `grove:"field_name"` | Maps to a column or document field |
+| `grove:"field,type:jsonb"` | Stores the field as JSONB (PostgreSQL) or JSON text (SQLite) |
+
+## Model/Mapper Pattern
+
+Each backend follows a consistent model/mapper pattern:
+
+1. **Model struct** -- database-level struct with `grove` tags (and `bson` tags for MongoDB).
+2. **`toXxxModel(entity) *xxxModel`** -- converts a domain entity to a database model.
+3. **`fromXxxModel(model) (*Entity, error)`** -- converts a database model back to a domain entity, parsing TypeIDs.
+
+This pattern isolates the domain types from database concerns while keeping the mapping code explicit and testable.
+
+## Shared Store Interface
+
+All three backends implement the same composite `store.Store` interface:
+
+```go
+type Store interface {
+    provider.Store
+    template.Store
+    message.Store
+    inbox.Store
+    preference.Store
+    scope.Store
+
+    Migrate(ctx context.Context) error
+    Ping(ctx context.Context) error
+    Close() error
+}
+```
+
+This means you can swap backends without changing any application code -- only the store construction changes.
+
+## Choosing a Backend
+
+| Backend | Best For | Driver Package |
+|---------|----------|----------------|
+| [PostgreSQL](/docs/stores/postgres) | Production deployments, multi-instance apps | `grove/drivers/pgdriver` |
+| [SQLite](/docs/stores/sqlite) | Development, testing, single-node deployments | `grove/drivers/sqlitedriver` |
+| [MongoDB](/docs/stores/mongo) | Document-oriented workloads, existing MongoDB infrastructure | `grove/drivers/mongodriver` |
+| [Memory](/docs/stores/memory) | Unit tests, ephemeral environments | N/A (no Grove required) |

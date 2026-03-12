@@ -1,0 +1,277 @@
+---
+title: Forge Extension
+description: Using Herald as a Forge extension with YAML config, auto-registration, and lifecycle integration.
+---
+
+Herald ships a first-class [Forge](https://github.com/xraph/forge) extension that handles store construction, migration, route registration, driver loading, health checks, and graceful shutdown automatically. This guide covers setup via YAML configuration and programmatic options.
+
+## Quick Start
+
+```go
+import (
+    "github.com/xraph/forge"
+    heraldext "github.com/xraph/herald/extension"
+)
+
+app := forge.New()
+app.Register(heraldext.New(
+    heraldext.WithGroveDatabase(""),
+))
+app.Run()
+```
+
+That single call registers Herald into the Forge lifecycle:
+
+1. Loads configuration from YAML (or programmatic defaults).
+2. Resolves a `*grove.DB` from the DI container.
+3. Auto-constructs the correct store backend (PostgreSQL, SQLite, or MongoDB).
+4. Registers all built-in notification drivers (SMTP, Resend, Twilio, FCM, InApp).
+5. Runs database migrations (unless disabled).
+6. Mounts the HTTP API routes under `/herald` (unless disabled).
+7. Provides the `*herald.Herald` instance to the DI container via [Vessel](https://github.com/xraph/vessel).
+
+## YAML Configuration
+
+Herald reads configuration from your Forge config file under either `extensions.herald` or `herald`:
+
+```yaml
+# config.yaml
+extensions:
+  herald:
+    base_path: "/herald"
+    grove_database: ""
+    disable_routes: false
+    disable_migrate: false
+    default_locale: "en"
+    max_batch_size: 100
+    truncate_body_at: 1000
+```
+
+### Config Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `base_path` | `string` | `"/herald"` | URL prefix for all Herald routes |
+| `grove_database` | `string` | `""` | Named Grove DB from DI (empty = default) |
+| `disable_routes` | `bool` | `false` | Skip automatic route registration |
+| `disable_migrate` | `bool` | `false` | Skip automatic database migration |
+| `default_locale` | `string` | `"en"` | Default locale for template rendering |
+| `max_batch_size` | `int` | `100` | Maximum recipients per batch send |
+| `truncate_body_at` | `int` | `1000` | Max characters stored in message body log |
+
+### Config Resolution Order
+
+The extension loads configuration in this order:
+
+1. YAML file (`extensions.herald` key, then legacy `herald` key).
+2. Programmatic options (`ExtOption` functions).
+3. Defaults for any zero-valued fields.
+
+YAML values take precedence for string and integer fields. Programmatic boolean flags (`DisableRoutes`, `DisableMigrate`) override when set to `true`.
+
+## Programmatic Options
+
+All configuration can be set via `ExtOption` functions passed to `heraldext.New()`:
+
+```go
+ext := heraldext.New(
+    heraldext.WithGroveDatabase("notifications"),
+    heraldext.WithBasePath("/api/notifications"),
+    heraldext.WithDisableRoutes(),
+    heraldext.WithDisableMigrate(),
+    heraldext.WithDriver(&myCustomDriver{}),
+    heraldext.WithHeraldOption(herald.WithDefaultLocale("fr")),
+)
+```
+
+### Available Options
+
+| Option | Description |
+|--------|-------------|
+| `WithStore(s store.Store)` | Set an explicit store backend |
+| `WithGroveDatabase(name string)` | Resolve a Grove DB from DI |
+| `WithBasePath(path string)` | Set the route URL prefix |
+| `WithConfig(cfg Config)` | Set the full config struct |
+| `WithHeraldOption(opt herald.Option)` | Pass a raw `herald.Option` |
+| `WithDriver(d driver.Driver)` | Register a notification driver |
+| `WithDisableRoutes()` | Disable automatic route registration |
+| `WithDisableMigrate()` | Disable automatic migration |
+| `WithRequireConfig(bool)` | Require YAML config presence |
+
+## Store Resolution
+
+The extension resolves its store in this order:
+
+1. **Explicit store** -- if `WithStore(s)` was called, it is used directly.
+2. **Grove database** -- if `WithGroveDatabase(name)` was called, the named (or default) `*grove.DB` is resolved from the DI container. The store backend is auto-detected from the Grove driver:
+
+```go
+switch db.Driver().Name() {
+case "pg":     return pgstore.New(db), nil
+case "sqlite": return sqlitestore.New(db), nil
+case "mongo":  return mongostore.New(db), nil
+}
+```
+
+3. **Failure** -- if neither is configured, `herald.New()` returns `ErrNoStore`.
+
+### Using a Named Grove Database
+
+In a multi-database Forge application, reference a specific database by name:
+
+```go
+heraldext.New(
+    heraldext.WithGroveDatabase("notifications"),
+)
+```
+
+This resolves the `*grove.DB` named `"notifications"` from the DI container. If you pass an empty string, the default (unnamed) database is used.
+
+## Built-in Driver Registration
+
+The extension automatically registers all built-in notification drivers during initialization:
+
+| Driver | Package | Channel |
+|--------|---------|---------|
+| SMTP | `herald/driver/email` | `email` |
+| Resend | `herald/driver/email` | `email` |
+| Twilio | `herald/driver/sms` | `sms` |
+| FCM | `herald/driver/push` | `push` |
+| InApp | `herald/driver/inapp` | `inapp` |
+
+You can register additional custom drivers using `WithDriver()`.
+
+## Migration on Startup
+
+By default, the extension runs `store.Migrate(ctx)` during `Register`. This creates all 7 Herald tables (or collections for MongoDB) and their indexes. The migration system is idempotent, so calling it on every startup is safe.
+
+To disable automatic migration (for example, in production where migrations are managed separately):
+
+```go
+heraldext.New(
+    heraldext.WithDisableMigrate(),
+)
+```
+
+Or via YAML:
+
+```yaml
+extensions:
+  herald:
+    disable_migrate: true
+```
+
+## Route Registration
+
+The extension mounts all Herald HTTP API routes under the configured base path (default `/herald`). Routes are organized into groups:
+
+| Group | Base | Endpoints |
+|-------|------|-----------|
+| Providers | `/herald/providers` | CRUD for notification providers |
+| Templates | `/herald/templates` | CRUD for templates and versions |
+| Send | `/herald/send`, `/herald/notify` | Send notifications |
+| Messages | `/herald/messages` | Query delivery log |
+| Inbox | `/herald/inbox` | User in-app notifications |
+| Preferences | `/herald/preferences` | User notification preferences |
+| Config | `/herald/config` | Scoped provider configuration |
+
+To disable automatic route registration and mount routes manually:
+
+```go
+ext := heraldext.New(
+    heraldext.WithDisableRoutes(),
+    heraldext.WithGroveDatabase(""),
+)
+app.Register(ext)
+
+// Mount routes manually on a custom path.
+ext.RegisterRoutes(app.Router().Group("/api/v1/notifications"))
+```
+
+## Health Checks
+
+The extension implements `forge.Extension`'s `Health(ctx)` method by calling `store.Ping(ctx)`. Forge automatically includes this in its health check endpoint.
+
+```go
+func (e *Extension) Health(ctx context.Context) error {
+    if e.h == nil {
+        return errors.New("herald extension not initialized")
+    }
+    return e.h.Store().Ping(ctx)
+}
+```
+
+## DI Container Integration
+
+After registration, the `*herald.Herald` instance is available from the DI container:
+
+```go
+// In another extension or handler
+h, err := vessel.Inject[*herald.Herald](app.Container())
+if err != nil {
+    log.Fatal("herald not registered:", err)
+}
+
+result, err := h.Send(ctx, &herald.SendRequest{
+    AppID:   "myapp",
+    Channel: "email",
+    To:      []string{"user@example.com"},
+    Template: "welcome",
+    Data:    map[string]any{"name": "Alice"},
+})
+```
+
+## Lifecycle
+
+The extension participates in the full Forge lifecycle:
+
+| Method | When Called | What Happens |
+|--------|------------|-------------|
+| `Register(app)` | App startup | Load config, init Herald, run migrations, register routes, provide to DI |
+| `Start(ctx)` | After all extensions registered | Marks extension as started |
+| `Health(ctx)` | Health check requests | Pings the store |
+| `Stop(ctx)` | Graceful shutdown | Marks extension as stopped |
+
+## Complete Example
+
+```go
+package main
+
+import (
+    "github.com/xraph/forge"
+    "github.com/xraph/grove"
+    groveext "github.com/xraph/grove/extension"
+    "github.com/xraph/grove/drivers/pgdriver"
+    heraldext "github.com/xraph/herald/extension"
+)
+
+func main() {
+    app := forge.New()
+
+    // Register Grove with a PostgreSQL database.
+    app.Register(groveext.New(
+        groveext.WithDriver(pgdriver.New(
+            pgdriver.WithDSN("postgres://localhost:5432/myapp?sslmode=disable"),
+        )),
+    ))
+
+    // Register Herald -- it auto-detects the Grove driver.
+    app.Register(heraldext.New(
+        heraldext.WithGroveDatabase(""),
+    ))
+
+    app.Run()
+}
+```
+
+With the corresponding YAML config:
+
+```yaml
+# config.yaml
+extensions:
+  grove:
+    dsn: "postgres://localhost:5432/myapp?sslmode=disable"
+  herald:
+    base_path: "/herald"
+    default_locale: "en"
+```

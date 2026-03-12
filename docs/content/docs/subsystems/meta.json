@@ -1,0 +1,13 @@
+{
+  "title": "Subsystems",
+  "pages": [
+    "providers",
+    "templates",
+    "delivery",
+    "inbox",
+    "preferences",
+    "scoped-config",
+    "drivers",
+    "observability"
+  ]
+}

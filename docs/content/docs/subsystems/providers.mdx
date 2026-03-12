@@ -1,0 +1,209 @@
+---
+title: Providers
+description: Configure notification delivery providers with driver credentials, channel types, and priority-based selection.
+---
+
+Providers are the bridge between Herald and external notification services. Each provider binds a **driver** (SMTP, Resend, Twilio, FCM, or InApp) to a set of **credentials** and a **channel type**, giving Herald the information it needs to deliver notifications through that service.
+
+## Provider Entity
+
+The `provider.Provider` struct represents a configured delivery provider scoped to a single application and channel:
+
+```go
+package provider
+
+type Provider struct {
+    ID          id.ProviderID     `json:"id"`
+    AppID       string            `json:"app_id"`
+    Name        string            `json:"name"`
+    Channel     string            `json:"channel"`       // "email", "sms", "push", "inapp"
+    Driver      string            `json:"driver"`        // "smtp", "resend", "twilio", "fcm", "inapp"
+    Credentials map[string]string `json:"credentials"`   // driver-specific secrets
+    Settings    map[string]string `json:"settings"`      // driver-specific non-secret config
+    Priority    int               `json:"priority"`      // lower value = higher priority
+    Enabled     bool              `json:"enabled"`
+    CreatedAt   time.Time         `json:"created_at"`
+    UpdatedAt   time.Time         `json:"updated_at"`
+}
+```
+
+Each provider is assigned a TypeID with the `hpvd` prefix (e.g., `hpvd_01j8x7k2...`).
+
+## Channel Types
+
+Herald supports four notification channels. Each provider is bound to exactly one channel:
+
+| Channel | Description | Common Drivers |
+|---------|-------------|----------------|
+| `email` | Email delivery | `smtp`, `resend` |
+| `sms` | SMS text messages | `twilio` |
+| `push` | Mobile push notifications | `fcm` |
+| `inapp` | In-app inbox notifications | `inapp` |
+
+The `herald.ChannelType` constants define these values:
+
+```go
+const (
+    ChannelEmail ChannelType = "email"
+    ChannelSMS   ChannelType = "sms"
+    ChannelPush  ChannelType = "push"
+    ChannelInApp ChannelType = "inapp"
+)
+```
+
+## Driver Configuration
+
+Each driver requires specific credentials and settings. These are stored as `map[string]string` on the provider.
+
+### SMTP
+
+```go
+Credentials: map[string]string{
+    "host":     "smtp.example.com",
+    "port":     "587",
+    "username": "notifications@example.com",
+    "password": "secret",
+},
+Settings: map[string]string{
+    "use_tls":   "true",
+    "from":      "noreply@example.com",
+    "from_name": "My App",
+},
+```
+
+### Resend
+
+```go
+Credentials: map[string]string{
+    "api_key": "re_abc123...",
+},
+Settings: map[string]string{
+    "from":      "noreply@example.com",
+    "from_name": "My App",
+},
+```
+
+### Twilio
+
+```go
+Credentials: map[string]string{
+    "account_sid": "AC...",
+    "auth_token":  "auth_token_here",
+    "from_number": "+15551234567",
+},
+```
+
+### FCM (Firebase Cloud Messaging)
+
+```go
+Credentials: map[string]string{
+    "project_id":   "my-firebase-project",
+    "access_token": "ya29.a0...",      // OAuth2 access token
+    // OR legacy:
+    "server_key":   "AAAA...",         // legacy server key
+},
+```
+
+### InApp
+
+The in-app driver requires no credentials. Herald handles inbox storage directly:
+
+```go
+Credentials: map[string]string{},
+Settings:    map[string]string{},
+```
+
+## Priority-Based Selection
+
+When multiple providers are configured for the same channel, Herald selects the best one using a priority system. Lower `Priority` values indicate higher preference.
+
+During delivery, the [scope resolver](/docs/subsystems/scoped-config) walks the scope chain (user, org, app) to find provider overrides. If no override exists, Herald falls back to the first enabled provider for that channel sorted by priority:
+
+```go
+// Providers are sorted by priority (ascending) before selection.
+sort.Slice(providers, func(i, j int) bool {
+    return providers[i].Priority < providers[j].Priority
+})
+
+for _, p := range providers {
+    if p.Enabled {
+        return &ResolveResult{Provider: p}, nil
+    }
+}
+```
+
+This means you can set up primary and fallback providers:
+
+| Provider | Channel | Priority | Enabled |
+|----------|---------|----------|---------|
+| Resend Production | email | 0 | true |
+| SMTP Fallback | email | 10 | true |
+| Twilio | sms | 0 | true |
+
+## Enabling and Disabling
+
+Providers can be toggled on or off via the `Enabled` field. A disabled provider is skipped during resolution, allowing you to take a provider offline without deleting its configuration.
+
+## Store Interface
+
+The `provider.Store` interface defines the persistence operations:
+
+```go
+type Store interface {
+    CreateProvider(ctx context.Context, p *Provider) error
+    GetProvider(ctx context.Context, providerID id.ProviderID) (*Provider, error)
+    UpdateProvider(ctx context.Context, p *Provider) error
+    DeleteProvider(ctx context.Context, providerID id.ProviderID) error
+    ListProviders(ctx context.Context, appID string, channel string) ([]*Provider, error)
+    ListAllProviders(ctx context.Context, appID string) ([]*Provider, error)
+}
+```
+
+`ListProviders` filters by channel while `ListAllProviders` returns every provider for the application regardless of channel.
+
+## API Endpoints
+
+Herald exposes full CRUD for providers under the `/providers` route group:
+
+| Method | Path | Operation |
+|--------|------|-----------|
+| `POST` | `/providers` | Create a new provider |
+| `GET` | `/providers` | List providers (filter by `app_id`, `channel`) |
+| `GET` | `/providers/:id` | Get a single provider |
+| `PUT` | `/providers/:id` | Update a provider |
+| `DELETE` | `/providers/:id` | Delete a provider |
+
+### Create Provider Example
+
+```go
+req := &api.CreateProviderRequest{
+    AppID:   "app_01abc...",
+    Name:    "Production Resend",
+    Channel: "email",
+    Driver:  "resend",
+    Credentials: map[string]string{
+        "api_key": "re_abc123...",
+    },
+    Settings: map[string]string{
+        "from":      "noreply@myapp.com",
+        "from_name": "MyApp Notifications",
+    },
+    Priority: 0,
+    Enabled:  true,
+}
+```
+
+## Driver Validation
+
+Each driver implements a `Validate` method that checks whether the provided credentials contain all required keys before the provider is used:
+
+```go
+type Driver interface {
+    Name() string
+    Channel() string
+    Send(ctx context.Context, msg *OutboundMessage) (*DeliveryResult, error)
+    Validate(credentials, settings map[string]string) error
+}
+```
+
+For example, the SMTP driver requires `host` and `port`, the Resend driver requires `api_key`, and the Twilio driver requires `account_sid`, `auth_token`, and `from_number`. See the [Drivers](/docs/subsystems/drivers) page for the full list of required credentials per driver.

@@ -1,0 +1,233 @@
+---
+title: MongoDB Store
+description: Document-oriented MongoDB backend using Grove ORM with mongodriver.
+---
+
+The MongoDB store (`herald/store/mongo`) provides a document-oriented backend for Herald using [Grove ORM](https://github.com/xraph/grove) with `mongodriver`. It maps Herald entities to 7 MongoDB collections with compound indexes, uses dual `grove`/`bson` struct tags, and supports upsert via `$setOnInsert`/`$set` for idempotent writes.
+
+## Installation
+
+```bash
+go get github.com/xraph/herald
+go get github.com/xraph/grove
+go get github.com/xraph/grove/drivers/mongodriver
+go get go.mongodb.org/mongo-driver/v2
+```
+
+## Creating a Store
+
+```go
+import (
+    "github.com/xraph/grove"
+    "github.com/xraph/grove/drivers/mongodriver"
+    "github.com/xraph/herald/store/mongo"
+)
+
+// Open a MongoDB connection via Grove.
+db := grove.Open(mongodriver.New(
+    mongodriver.WithURI("mongodb://localhost:27017"),
+    mongodriver.WithDatabase("herald"),
+))
+
+// Create the Herald store.
+store := mongo.New(db)
+
+// Run migrations (creates indexes).
+if err := store.Migrate(ctx); err != nil {
+    log.Fatal("migration failed:", err)
+}
+```
+
+## Constructor
+
+```go
+func New(db *grove.DB) *Store
+```
+
+`New` accepts a `*grove.DB` backed by `mongodriver` and returns a `*Store` that satisfies the `store.Store` interface. Internally it calls `mongodriver.Unwrap(db)` to access the MongoDB-specific operations.
+
+## Collections
+
+The store uses 7 collections, defined as constants:
+
+| Collection | Entity | Primary Key Prefix |
+|------------|--------|--------------------|
+| `herald_providers` | Provider configuration | `hpvd_` |
+| `herald_templates` | Template definitions | `htpl_` |
+| `herald_template_versions` | Locale-specific content | `htpv_` |
+| `herald_messages` | Delivery log | `hmsg_` |
+| `herald_inbox` | In-app notifications | `hinb_` |
+| `herald_preferences` | User preferences | `hprf_` |
+| `herald_scoped_configs` | Scoped provider overrides | `hscf_` |
+
+## Indexes
+
+The `Migrate` method creates the following indexes on each collection:
+
+### herald_providers
+- Compound index: `{app_id: 1, channel: 1}`
+
+### herald_templates
+- Unique compound index: `{app_id: 1, slug: 1, channel: 1}`
+
+### herald_template_versions
+- Unique compound index: `{template_id: 1, locale: 1}`
+
+### herald_messages
+- Compound index: `{app_id: 1, status: 1}`
+- Descending index: `{created_at: -1}`
+
+### herald_inbox
+- Compound index: `{user_id: 1, read: 1, created_at: -1}`
+- Compound index: `{app_id: 1, user_id: 1}`
+
+### herald_preferences
+- Unique compound index: `{app_id: 1, user_id: 1}`
+
+### herald_scoped_configs
+- Unique compound index: `{app_id: 1, scope: 1, scope_id: 1}`
+
+## BSON Document Mapping
+
+MongoDB model structs carry dual struct tags -- `grove` for the ORM layer and `bson` for the MongoDB driver:
+
+```go
+type providerModel struct {
+    grove.BaseModel `grove:"table:herald_providers"`
+
+    ID          string            `grove:"id,pk"       bson:"_id"`
+    AppID       string            `grove:"app_id"      bson:"app_id"`
+    Name        string            `grove:"name"        bson:"name"`
+    Channel     string            `grove:"channel"     bson:"channel"`
+    Driver      string            `grove:"driver"      bson:"driver"`
+    Credentials map[string]string `grove:"credentials" bson:"credentials,omitempty"`
+    Settings    map[string]string `grove:"settings"    bson:"settings,omitempty"`
+    Priority    int               `grove:"priority"    bson:"priority"`
+    Enabled     bool              `grove:"enabled"     bson:"enabled"`
+    CreatedAt   time.Time         `grove:"created_at"  bson:"created_at"`
+    UpdatedAt   time.Time         `grove:"updated_at"  bson:"updated_at"`
+}
+```
+
+Key differences from the SQL stores:
+- The `id` field maps to `_id` in BSON (MongoDB's document primary key).
+- Maps (`map[string]string`) are stored as native BSON documents rather than JSON text.
+- `json.RawMessage` fields (like `variables` and `overrides`) remain as `json.RawMessage` but are stored as raw BSON.
+- Optional time fields use `bson:"field,omitempty"` to avoid storing zero timestamps.
+
+## Upsert Patterns
+
+The MongoDB store uses `$setOnInsert`/`$set` for upsert operations on preferences and scoped configs:
+
+```go
+// Preference upsert
+_, err := s.mdb.NewUpdate(m).
+    Filter(bson.M{"app_id": m.AppID, "user_id": m.UserID}).
+    SetUpdate(bson.M{
+        "$setOnInsert": bson.M{
+            "_id":        m.ID,
+            "app_id":     m.AppID,
+            "user_id":    m.UserID,
+            "created_at": m.CreatedAt,
+        },
+        "$set": bson.M{
+            "overrides":  m.Overrides,
+            "updated_at": m.UpdatedAt,
+        },
+    }).
+    Upsert().
+    Exec(ctx)
+```
+
+This ensures that on insert, the immutable fields (`_id`, `app_id`, `user_id`, `created_at`) are set once, while mutable fields are always updated.
+
+## Migration System
+
+Unlike the SQL backends that use `exec.Exec(ctx, sql)`, the MongoDB migrations use `mongomigrate.Executor` with collection-aware operations:
+
+```go
+Up: func(ctx context.Context, exec migrate.Executor) error {
+    mexec, ok := exec.(*mongomigrate.Executor)
+    if !ok {
+        return fmt.Errorf("expected mongomigrate executor, got %T", exec)
+    }
+    if err := mexec.CreateCollection(ctx, (*providerModel)(nil)); err != nil {
+        return err
+    }
+    return mexec.CreateIndexes(ctx, "herald_providers", []mongo.IndexModel{
+        {Keys: bson.D{{Key: "app_id", Value: 1}, {Key: "channel", Value: 1}}},
+    })
+},
+```
+
+The `Migrate` method on the store also provides a simpler path that creates indexes directly using the MongoDB driver, without going through the migration orchestrator.
+
+## Lifecycle Methods
+
+| Method | Behaviour |
+|--------|-----------|
+| `Migrate(ctx)` | Creates all 7 collections with their indexes |
+| `Ping(ctx)` | Calls `db.Ping(ctx)` to verify MongoDB connectivity |
+| `Close()` | Calls `db.Close()` to disconnect from MongoDB |
+
+## Connection Setup Example
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+    "os"
+
+    "github.com/xraph/grove"
+    "github.com/xraph/grove/drivers/mongodriver"
+    "github.com/xraph/herald"
+    mongostore "github.com/xraph/herald/store/mongo"
+)
+
+func main() {
+    ctx := context.Background()
+
+    uri := os.Getenv("MONGODB_URI")
+    if uri == "" {
+        uri = "mongodb://localhost:27017"
+    }
+
+    db := grove.Open(mongodriver.New(
+        mongodriver.WithURI(uri),
+        mongodriver.WithDatabase("herald"),
+    ))
+
+    store := mongostore.New(db)
+    if err := store.Migrate(ctx); err != nil {
+        log.Fatal("migrate:", err)
+    }
+    if err := store.Ping(ctx); err != nil {
+        log.Fatal("ping:", err)
+    }
+
+    h, err := herald.New(
+        herald.WithStore(store),
+    )
+    if err != nil {
+        log.Fatal("herald:", err)
+    }
+    defer store.Close()
+
+    _ = h
+}
+```
+
+## When to Use
+
+- **Document-oriented workloads** -- flexible schemas that evolve with your application.
+- **Existing MongoDB infrastructure** -- leverage your current MongoDB cluster.
+- **Horizontal scaling** -- MongoDB sharding for large-scale notification workloads.
+- **Cloud-native deployments** -- MongoDB Atlas for fully managed document storage.
+
+## Considerations
+
+- **No foreign key cascades** -- the store manually deletes template versions before deleting templates.
+- **Eventual consistency** -- MongoDB's default read/write concern may not provide immediate consistency for all operations. Configure write concern as needed.
+- **TypeID as `_id`** -- Herald uses string TypeIDs as `_id` rather than MongoDB's native `ObjectId`, ensuring consistent identity across all backends.

@@ -1,0 +1,158 @@
+---
+title: Identity (TypeID)
+description: How Herald uses prefix-qualified, globally unique identifiers for every entity.
+---
+
+Every entity in Herald has a TypeID. TypeIDs are globally unique, K-sortable, URL-safe identifiers built on UUIDv7 with a human-readable prefix that tells you what kind of entity you are looking at.
+
+A TypeID looks like this:
+
+```
+hpvd_01h455vb4pex5vsknk084sn02q
+```
+
+The `hpvd` prefix identifies this as a **Provider**. The suffix is a base32-encoded UUIDv7 that encodes creation time, so IDs sort chronologically.
+
+## The `id` package
+
+**Import:** `github.com/xraph/herald/id`
+
+The `id` package wraps the [TypeID Go library](https://github.com/jetify-com/typeid-go) (v2) with a single `ID` struct. All entity types share the same struct -- the prefix distinguishes them.
+
+### Creating IDs
+
+Use the generic `id.New` constructor with a prefix constant, or the convenience constructors for each entity type:
+
+```go
+import "github.com/xraph/herald/id"
+
+// Generic constructor
+providerID := id.New(id.PrefixProvider)        // hpvd_01h455vb...
+templateID := id.New(id.PrefixTemplate)        // htpl_01h455vb...
+
+// Convenience constructors (preferred)
+providerID  := id.NewProviderID()        // hpvd_...
+templateID  := id.NewTemplateID()        // htpl_...
+versionID   := id.NewTemplateVersionID() // htpv_...
+messageID   := id.NewMessageID()         // hmsg_...
+inboxID     := id.NewInboxID()           // hinb_...
+preferenceID := id.NewPreferenceID()     // hprf_...
+scopedCfgID := id.NewScopedConfigID()    // hscf_...
+```
+
+### Parsing IDs
+
+Parse a raw string into an `ID`. Use `ParseWithPrefix` or the convenience parsers to validate the prefix at parse time:
+
+```go
+// Parse any Herald ID (no prefix validation).
+parsed, err := id.Parse("hpvd_01h455vb4pex5vsknk084sn02q")
+
+// Parse with explicit prefix validation.
+parsed, err := id.ParseWithPrefix("hpvd_01h455vb...", id.PrefixProvider)
+
+// Convenience parsers (validate prefix automatically).
+providerID, err := id.ParseProviderID("hpvd_01h455vb...")
+templateID, err := id.ParseTemplateID("htpl_01h455vb...")
+versionID, err  := id.ParseTemplateVersionID("htpv_01h455vb...")
+messageID, err  := id.ParseMessageID("hmsg_01h455vb...")
+inboxID, err    := id.ParseInboxID("hinb_01h455vb...")
+prefID, err     := id.ParsePreferenceID("hprf_01h455vb...")
+scopeID, err    := id.ParseScopedConfigID("hscf_01h455vb...")
+
+// Parse without type checking (alias for id.Parse).
+anyID, err := id.ParseAny("hmsg_01h455vb...")
+```
+
+If the string is empty, malformed, or has the wrong prefix, parsing returns an error.
+
+### MustParse
+
+For hardcoded IDs in tests or seed data, `MustParse` panics on error instead of returning one:
+
+```go
+known := id.MustParse("hpvd_01h455vb4pex5vsknk084sn02q")
+```
+
+### Nil ID
+
+The zero-value `ID` is called `Nil`. It represents an absent or unset identifier:
+
+```go
+var empty id.ID
+empty.IsNil()  // true
+empty.String() // ""
+id.Nil.IsNil() // true
+```
+
+## Type aliases
+
+Each entity type has a named alias for readability. These are type aliases (`=`), not distinct types, so they are fully interchangeable with `id.ID`:
+
+```go
+type ProviderID        = ID
+type TemplateID        = ID
+type TemplateVersionID = ID
+type MessageID         = ID
+type InboxID           = ID
+type PreferenceID      = ID
+type ScopedConfigID    = ID
+```
+
+Store interfaces and struct fields use these aliases to document intent:
+
+```go
+type Provider struct {
+    ID id.ProviderID `json:"id"`
+    // ...
+}
+```
+
+## Database storage
+
+`id.ID` implements `database/sql.Scanner` and `database/sql/driver.Valuer`. IDs are stored as plain strings (`TEXT` / `VARCHAR`) in all databases. A `Nil` ID stores as SQL `NULL`.
+
+```go
+// Writing to the database (driver.Valuer).
+providerID.Value() // ("hpvd_01h455vb...", nil)
+id.Nil.Value()     // (nil, nil) -- SQL NULL
+
+// Reading from the database (sql.Scanner).
+var scanned id.ID
+row.Scan(&scanned)
+```
+
+## JSON serialization
+
+`id.ID` implements `encoding.TextMarshaler` and `encoding.TextUnmarshaler`. Nil IDs serialize as empty strings:
+
+```json
+{ "id": "hpvd_01h455vb4pex5vsknk084sn02q" }
+```
+
+```json
+{ "id": "" }
+```
+
+## BSON serialization
+
+For MongoDB, `id.ID` implements `bson.ValueMarshaler` and `bson.ValueUnmarshaler` (mongo-driver v2). IDs are stored as BSON strings. Nil IDs store as BSON null.
+
+```go
+// MarshalBSONValue returns bsonTypeString with the ID as a UTF-8 string.
+// UnmarshalBSONValue reads a BSON string and parses it back into an ID.
+```
+
+## Prefix reference
+
+| Constant | Prefix | Entity | Example |
+|----------|--------|--------|---------|
+| `id.PrefixProvider` | `hpvd` | Provider | `hpvd_01h455vb4pex5vsknk084sn02q` |
+| `id.PrefixTemplate` | `htpl` | Template | `htpl_01h455vb4pex5vsknk084sn02q` |
+| `id.PrefixTemplateVersion` | `htpv` | Template Version | `htpv_01h455vb4pex5vsknk084sn02q` |
+| `id.PrefixMessage` | `hmsg` | Message | `hmsg_01h455vb4pex5vsknk084sn02q` |
+| `id.PrefixInbox` | `hinb` | Inbox Notification | `hinb_01h455vb4pex5vsknk084sn02q` |
+| `id.PrefixPreference` | `hprf` | Preference | `hprf_01h455vb4pex5vsknk084sn02q` |
+| `id.PrefixScopedConfig` | `hscf` | Scoped Config | `hscf_01h455vb4pex5vsknk084sn02q` |
+
+All prefixes start with `h` to identify Herald entities at a glance.

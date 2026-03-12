@@ -1,0 +1,305 @@
+---
+title: Delivery Pipeline
+description: Understand Herald's notification delivery pipeline including Send, Notify, message lifecycle, and provider resolution.
+---
+
+Herald's delivery pipeline is the core of the notification engine. It resolves templates, checks user preferences, selects the right provider through the scope chain, and dispatches messages through the appropriate driver. There are two entry points: `Send` for single-channel delivery and `Notify` for multi-channel template-based delivery.
+
+## Send vs Notify
+
+Herald provides two methods for sending notifications, each suited to different use cases.
+
+### engine.Send()
+
+`Send` delivers a notification on a **single channel** to one or more recipients. You specify the channel, and optionally a template or raw content:
+
+```go
+result, err := h.Send(ctx, &herald.SendRequest{
+    AppID:    "app_01abc...",
+    Channel:  "email",
+    Template: "auth.password-reset",
+    To:       []string{"alice@example.com"},
+    Data: map[string]any{
+        "user_name": "Alice",
+        "app_name":  "MyApp",
+        "reset_url": "https://myapp.com/reset?token=xyz",
+    },
+})
+```
+
+You can also send without a template by providing `Subject` and `Body` directly:
+
+```go
+result, err := h.Send(ctx, &herald.SendRequest{
+    AppID:   "app_01abc...",
+    Channel: "email",
+    To:      []string{"alice@example.com"},
+    Subject: "Account Update",
+    Body:    "Your account settings have been updated.",
+})
+```
+
+### engine.Notify()
+
+`Notify` sends a template-based notification across **multiple channels** in a single call. Herald iterates over the specified channels and calls `Send` for each one:
+
+```go
+results, err := h.Notify(ctx, &herald.NotifyRequest{
+    AppID:    "app_01abc...",
+    Template: "auth.password-changed",
+    Channels: []string{"email", "inapp"},
+    To:       []string{"alice@example.com"},
+    UserID:   "user_01xyz...",
+    Data: map[string]any{
+        "user_name": "Alice",
+        "app_name":  "MyApp",
+    },
+})
+```
+
+If delivery fails on one channel, Herald logs a warning and continues with the remaining channels. The returned `[]*SendResult` slice contains one result per channel.
+
+## Delivery Pipeline Steps
+
+When `Send` is called, Herald executes the following steps in order:
+
+### 1. Preference Check
+
+If a `UserID` and `Template` are provided, Herald checks whether the user has opted out of this notification type on the requested channel:
+
+```go
+if req.UserID != "" && req.Template != "" {
+    pref, _ := h.store.GetPreference(ctx, req.AppID, req.UserID)
+    if pref != nil && pref.IsOptedOut(req.Template, channel) {
+        return &SendResult{Status: message.StatusSent, Error: "user opted out"}, nil
+    }
+}
+```
+
+If the user has opted out, Herald returns early without sending. See [Preferences](/docs/subsystems/preferences) for details.
+
+### 2. Template Resolution and Rendering
+
+If a `Template` slug is specified and no raw `Body` is provided, Herald looks up the template by slug, app, and channel, then renders it for the requested locale:
+
+```go
+tmpl, err := h.store.GetTemplateBySlug(ctx, req.AppID, req.Template, channel)
+rendered, err := h.renderer.Render(tmpl, locale, req.Data)
+```
+
+The locale falls back through the chain: exact match, language prefix, then default. See [Templates](/docs/subsystems/templates) for the rendering details.
+
+### 3. Provider Resolution
+
+Herald resolves the best provider for the channel using the [scope chain](/docs/subsystems/scoped-config):
+
+```
+User scope -> Org scope -> App scope -> Priority-based fallback
+```
+
+```go
+resolved, err := h.resolver.ResolveProvider(ctx, req.AppID, req.OrgID, req.UserID, channel)
+```
+
+The resolver returns both the `Provider` and any `Config` overrides (sender info, locale). If no provider is found at any level, Herald returns `ErrNoProviderConfigured`.
+
+### 4. Driver Lookup
+
+Once a provider is resolved, Herald retrieves the corresponding driver from the driver registry:
+
+```go
+drv, err := h.drivers.Get(prov.Driver)
+```
+
+The driver name on the provider (e.g., `"smtp"`, `"resend"`, `"twilio"`) must match a registered driver. See [Drivers](/docs/subsystems/drivers) for the built-in options.
+
+### 5. Message Construction
+
+Herald builds the outbound message, injecting provider credentials and scoped sender info:
+
+```go
+outbound := &driver.OutboundMessage{
+    Subject:  rendered.Subject,
+    HTML:     rendered.HTML,
+    Text:     rendered.Text,
+    Title:    rendered.Title,
+    Data:     driverData,    // credentials + settings
+}
+
+// Sender info from scoped config or provider settings
+if resolved.Config != nil {
+    outbound.From = resolved.Config.FromEmail
+    outbound.FromName = resolved.Config.FromName
+}
+```
+
+### 6. Delivery and Logging
+
+For each recipient, Herald creates a message log entry, sends via the driver, and updates the status:
+
+```go
+msg := &message.Message{
+    ID:       id.NewMessageID(),
+    Status:   message.StatusSending,
+    Attempts: 1,
+    // ... other fields
+}
+_ = h.store.CreateMessage(ctx, msg)
+
+result, sendErr := drv.Send(ctx, outbound)
+
+if sendErr != nil {
+    _ = h.store.UpdateMessageStatus(ctx, msg.ID, message.StatusFailed, sendErr.Error())
+} else {
+    _ = h.store.UpdateMessageStatus(ctx, msg.ID, message.StatusSent, "")
+}
+```
+
+### 7. Inbox Entry (In-App Channel)
+
+When the channel is `inapp` and a `UserID` is provided, Herald also creates an inbox notification entry:
+
+```go
+if channel == string(ChannelInApp) && req.UserID != "" {
+    _ = h.store.CreateNotification(ctx, &inbox.Notification{
+        ID:     id.NewInboxID(),
+        UserID: req.UserID,
+        Type:   req.Template,
+        Title:  rendered.Title,
+        Body:   rendered.Text,
+        // ...
+    })
+}
+```
+
+## Message Status Lifecycle
+
+Every notification delivery is logged as a `message.Message` record. Messages progress through these states:
+
+```
+queued -> sending -> sent -> delivered
+                  \-> failed
+                  \-> bounced
+```
+
+| Status | Description |
+|--------|-------------|
+| `queued` | Message is queued for delivery (async mode) |
+| `sending` | Herald is actively attempting delivery |
+| `sent` | The driver accepted the message |
+| `delivered` | Delivery confirmed by the provider (e.g., webhook callback) |
+| `failed` | Delivery failed after all attempts |
+| `bounced` | The recipient address bounced |
+
+```go
+const (
+    StatusQueued    Status = "queued"
+    StatusSending   Status = "sending"
+    StatusSent      Status = "sent"
+    StatusFailed    Status = "failed"
+    StatusBounced   Status = "bounced"
+    StatusDelivered Status = "delivered"
+)
+```
+
+## Message Entity
+
+The `message.Message` struct captures the full delivery context:
+
+```go
+type Message struct {
+    ID          id.MessageID      `json:"id"`
+    AppID       string            `json:"app_id"`
+    EnvID       string            `json:"env_id,omitempty"`
+    TemplateID  string            `json:"template_id,omitempty"`
+    ProviderID  string            `json:"provider_id,omitempty"`
+    Channel     string            `json:"channel"`
+    Recipient   string            `json:"recipient"`
+    Subject     string            `json:"subject,omitempty"`
+    Body        string            `json:"body,omitempty"`
+    Status      Status            `json:"status"`
+    Error       string            `json:"error,omitempty"`
+    Metadata    map[string]string `json:"metadata,omitempty"`
+    Async       bool              `json:"async"`
+    Attempts    int               `json:"attempts"`
+    SentAt      *time.Time        `json:"sent_at,omitempty"`
+    DeliveredAt *time.Time        `json:"delivered_at,omitempty"`
+    CreatedAt   time.Time         `json:"created_at"`
+}
+```
+
+Message IDs use the `hmsg` prefix. The `Body` field is truncated to the configured `TruncateBodyAt` limit (default: 4096 characters) to keep the delivery log compact.
+
+## Sync vs Async
+
+The `Async` flag on `SendRequest` and `NotifyRequest` controls the delivery mode:
+
+- **Sync (default)**: `Send` blocks until the driver returns a result. The caller receives the final status immediately.
+- **Async**: The message is initially recorded with status `queued`. Delivery happens in the background.
+
+```go
+result, err := h.Send(ctx, &herald.SendRequest{
+    AppID:    "app_01abc...",
+    Channel:  "email",
+    Template: "auth.welcome",
+    To:       []string{"alice@example.com"},
+    Async:    true, // return immediately, deliver in background
+    Data: map[string]any{
+        "user_name": "Alice",
+        "app_name":  "MyApp",
+    },
+})
+```
+
+## Metadata
+
+Both `SendRequest` and `NotifyRequest` accept a `Metadata` map. This is stored alongside the message in the delivery log and on inbox entries, enabling you to attach application-specific context:
+
+```go
+Metadata: map[string]string{
+    "order_id":   "ord_123",
+    "event_type": "order.shipped",
+},
+```
+
+## SendResult
+
+The return value of `Send` contains the outcome:
+
+```go
+type SendResult struct {
+    MessageID  id.MessageID   `json:"message_id"`
+    Status     message.Status `json:"status"`
+    ProviderID string         `json:"provider_id,omitempty"`
+    Error      string         `json:"error,omitempty"`
+}
+```
+
+## API Endpoints
+
+The delivery pipeline is exposed through two API routes:
+
+| Method | Path | Operation |
+|--------|------|-----------|
+| `POST` | `/send` | Single-channel send |
+| `POST` | `/notify` | Multi-channel template-based notify |
+
+The messages delivery log is available for querying:
+
+| Method | Path | Operation |
+|--------|------|-----------|
+| `GET` | `/messages` | List messages (filter by `app_id`, `channel`, `status`) |
+| `GET` | `/messages/:id` | Get a single message |
+
+### Listing Messages
+
+Messages can be filtered and paginated:
+
+```go
+type ListOptions struct {
+    Channel string
+    Status  Status
+    Limit   int
+    Offset  int
+}
+```
