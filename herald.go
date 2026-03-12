@@ -348,9 +348,9 @@ func (h *Herald) ResetDefaultTemplates(ctx context.Context, appID string) error 
 			continue
 		}
 		// Delete versions first, then the template.
-		versions, _ := h.store.ListVersions(ctx, t.ID) //nolint:errcheck
+		versions, _ := h.store.ListVersions(ctx, t.ID) //nolint:errcheck // best-effort cleanup
 		for _, v := range versions {
-			_ = h.store.DeleteVersion(ctx, v.ID) //nolint:errcheck
+			_ = h.store.DeleteVersion(ctx, v.ID) //nolint:errcheck // best-effort cleanup
 		}
 		if err := h.store.DeleteTemplate(ctx, t.ID); err != nil {
 			h.logger.Warn("herald: failed to delete system template during reset",

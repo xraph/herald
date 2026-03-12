@@ -7,7 +7,6 @@ import (
 	"github.com/xraph/forgeui/bridge"
 
 	"github.com/xraph/herald"
-	"github.com/xraph/herald/driver"
 	"github.com/xraph/herald/id"
 	"github.com/xraph/herald/inbox"
 	"github.com/xraph/herald/message"
@@ -172,14 +171,10 @@ func RegisterBridge(b *bridge.Bridge, heraldFn func() *herald.Herald) error {
 	}
 
 	// Config
-	if err := b.Register("herald.getConfig", reg.getConfig,
+	return b.Register("herald.getConfig", reg.getConfig,
 		bridge.WithDescription("Get Herald configuration"),
 		bridge.WithFunctionCache(30*time.Second),
-	); err != nil {
-		return err
-	}
-
-	return nil
+	)
 }
 
 // bridgeRegistry holds resolver functions for bridge function handlers.
@@ -201,14 +196,6 @@ func (r *bridgeRegistry) resolveStore() (store.Store, error) {
 		return nil, err
 	}
 	return h.Store(), nil
-}
-
-func (r *bridgeRegistry) resolveDrivers() (*driver.Registry, error) {
-	h, err := r.resolveHerald()
-	if err != nil {
-		return nil, err
-	}
-	return h.Drivers(), nil
 }
 
 // ── Parameter types ─────────────────────────────────────────────────────────
@@ -370,9 +357,9 @@ func (r *bridgeRegistry) getOverview(ctx bridge.Context, _ emptyParams) (*overvi
 
 	goCtx := ctx.Context()
 
-	provs, _ := s.ListAllProviders(goCtx, "")
-	tmpls, _ := s.ListTemplates(goCtx, "")
-	msgs, _ := s.ListMessages(goCtx, "", message.ListOptions{Limit: 1000})
+	provs, _ := s.ListAllProviders(goCtx, "")                              //nolint:errcheck // best-effort display data
+	tmpls, _ := s.ListTemplates(goCtx, "")                                 //nolint:errcheck // best-effort display data
+	msgs, _ := s.ListMessages(goCtx, "", message.ListOptions{Limit: 1000}) //nolint:errcheck // best-effort display data
 
 	var activeCount, failedCount, pendingCount int
 	channelBreakdown := make(map[string]int)
@@ -410,7 +397,7 @@ func (r *bridgeRegistry) getMessageCounts(ctx bridge.Context, _ emptyParams) (*m
 		return nil, err
 	}
 
-	msgs, _ := s.ListMessages(ctx.Context(), "", message.ListOptions{Limit: 1000})
+	msgs, _ := s.ListMessages(ctx.Context(), "", message.ListOptions{Limit: 1000}) //nolint:errcheck // best-effort display data
 
 	var sent, failed, pending int
 	for _, m := range msgs {
@@ -631,7 +618,7 @@ func (r *bridgeRegistry) getTemplate(ctx bridge.Context, params idParams) (*temp
 		return nil, getErr
 	}
 
-	versions, _ := s.ListVersions(ctx.Context(), tid)
+	versions, _ := s.ListVersions(ctx.Context(), tid) //nolint:errcheck // best-effort display data
 
 	return &templateDetailResponse{
 		Template: t,
@@ -827,7 +814,7 @@ func (r *bridgeRegistry) getInbox(ctx bridge.Context, params inboxParams) (*inbo
 		return nil, listErr
 	}
 
-	unread, _ := s.UnreadCount(ctx.Context(), "", params.UserID)
+	unread, _ := s.UnreadCount(ctx.Context(), "", params.UserID) //nolint:errcheck // best-effort display data
 
 	return &inboxResponse{
 		Notifications: notifications,

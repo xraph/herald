@@ -8,13 +8,13 @@ import (
 func NewManifest() *contributor.Manifest {
 	return &contributor.Manifest{
 		Name:        "herald",
-		DisplayName: "Notifications",
+		DisplayName: "Herald",
 		Icon:        "bell",
 		Version:     "1.0.0",
 		Layout:      "extension",
 		ShowSidebar: boolPtr(true),
 		TopbarConfig: &contributor.TopbarConfig{
-			Title:       "Notifications",
+			Title:       "Herald",
 			LogoIcon:    "bell",
 			AccentColor: "#f59e0b",
 			ShowSearch:  true,

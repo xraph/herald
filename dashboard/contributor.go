@@ -202,22 +202,22 @@ func (c *Contributor) renderProviderDetail(ctx context.Context, _ string, params
 	if action := params.QueryParams["action"]; action != "" {
 		switch action {
 		case "enable":
-			p, err := c.h.Store().GetProvider(ctx, pid)
-			if err == nil {
+			p, actionErr := c.h.Store().GetProvider(ctx, pid)
+			if actionErr == nil {
 				p.Enabled = true
 				p.UpdatedAt = time.Now()
-				_ = c.h.Store().UpdateProvider(ctx, p)
+				_ = c.h.Store().UpdateProvider(ctx, p) //nolint:errcheck // best-effort action
 			}
 		case "disable":
-			p, err := c.h.Store().GetProvider(ctx, pid)
-			if err == nil {
+			p, actionErr := c.h.Store().GetProvider(ctx, pid)
+			if actionErr == nil {
 				p.Enabled = false
 				p.UpdatedAt = time.Now()
-				_ = c.h.Store().UpdateProvider(ctx, p)
+				_ = c.h.Store().UpdateProvider(ctx, p) //nolint:errcheck // best-effort action
 			}
 		case "delete":
 			if delErr := c.h.Store().DeleteProvider(ctx, pid); delErr != nil {
-				p, _ := c.h.Store().GetProvider(ctx, pid) //nolint:errcheck
+				p, _ := c.h.Store().GetProvider(ctx, pid) //nolint:errcheck // best-effort for error display
 				return pages.ProviderDetailPage(pages.ProviderDetailPageData{
 					Provider: p,
 					Error:    delErr.Error(),
@@ -340,23 +340,23 @@ func (c *Contributor) renderTemplateDetail(ctx context.Context, _ string, params
 	if action := params.QueryParams["action"]; action != "" {
 		switch action {
 		case "enable":
-			t, err := c.h.Store().GetTemplate(ctx, tid)
-			if err == nil {
+			t, actionErr := c.h.Store().GetTemplate(ctx, tid)
+			if actionErr == nil {
 				t.Enabled = true
 				t.UpdatedAt = time.Now()
-				_ = c.h.Store().UpdateTemplate(ctx, t)
+				_ = c.h.Store().UpdateTemplate(ctx, t) //nolint:errcheck // best-effort action
 			}
 		case "disable":
-			t, err := c.h.Store().GetTemplate(ctx, tid)
-			if err == nil {
+			t, actionErr := c.h.Store().GetTemplate(ctx, tid)
+			if actionErr == nil {
 				t.Enabled = false
 				t.UpdatedAt = time.Now()
-				_ = c.h.Store().UpdateTemplate(ctx, t)
+				_ = c.h.Store().UpdateTemplate(ctx, t) //nolint:errcheck // best-effort action
 			}
 		case "delete":
 			if delErr := c.h.Store().DeleteTemplate(ctx, tid); delErr != nil {
-				t, _ := c.h.Store().GetTemplate(ctx, tid)         //nolint:errcheck
-				versions, _ := c.h.Store().ListVersions(ctx, tid) //nolint:errcheck
+				t, _ := c.h.Store().GetTemplate(ctx, tid)         //nolint:errcheck // best-effort for error display
+				versions, _ := c.h.Store().ListVersions(ctx, tid) //nolint:errcheck // best-effort for error display
 				return pages.TemplateDetailPage(pages.TemplateDetailPageData{
 					Template: t,
 					Versions: versions,
@@ -457,8 +457,8 @@ func (c *Contributor) renderMessageDetail(ctx context.Context, params contributo
 
 	// Handle retry action.
 	if params.QueryParams["action"] == "retry" {
-		msg, err := c.h.Store().GetMessage(ctx, mid)
-		if err == nil {
+		msg, getErr := c.h.Store().GetMessage(ctx, mid)
+		if getErr == nil {
 			_, sendErr := c.h.Send(ctx, &herald.SendRequest{
 				AppID:   msg.AppID,
 				Channel: msg.Channel,
@@ -473,7 +473,7 @@ func (c *Contributor) renderMessageDetail(ctx context.Context, params contributo
 				}), nil
 			}
 			// Re-fetch to show updated state.
-			msg, _ = c.h.Store().GetMessage(ctx, mid) //nolint:errcheck
+			msg, _ = c.h.Store().GetMessage(ctx, mid) //nolint:errcheck // best-effort re-fetch after retry
 			return pages.MessageDetailPage(pages.MessageDetailPageData{
 				Message: msg,
 			}), nil
@@ -500,17 +500,17 @@ func (c *Contributor) renderInbox(ctx context.Context, appID string, params cont
 	if action := params.QueryParams["action"]; action != "" {
 		switch action {
 		case "mark_all_read":
-			_ = c.h.Store().MarkAllRead(ctx, appID, userID)
+			_ = c.h.Store().MarkAllRead(ctx, appID, userID) //nolint:errcheck // best-effort action
 		case "mark_read":
 			if nid := params.QueryParams["notif_id"]; nid != "" {
 				if parsed, err := id.ParseInboxID(nid); err == nil {
-					_ = c.h.Store().MarkRead(ctx, parsed)
+					_ = c.h.Store().MarkRead(ctx, parsed) //nolint:errcheck // best-effort action
 				}
 			}
 		case "delete":
 			if nid := params.QueryParams["notif_id"]; nid != "" {
 				if parsed, err := id.ParseInboxID(nid); err == nil {
-					_ = c.h.Store().DeleteNotification(ctx, parsed)
+					_ = c.h.Store().DeleteNotification(ctx, parsed) //nolint:errcheck // best-effort action
 				}
 			}
 		}
@@ -654,9 +654,9 @@ func channelStrings() []string {
 }
 
 // parseKeyValueRows extracts key-value pairs from indexed form fields.
-func parseKeyValueRows(formData map[string]string, keyPrefix, valPrefix string, max int) map[string]string {
+func parseKeyValueRows(formData map[string]string, keyPrefix, valPrefix string, maxRows int) map[string]string {
 	result := make(map[string]string)
-	for i := 0; i < max; i++ {
+	for i := 0; i < maxRows; i++ {
 		key := strings.TrimSpace(formData[fmt.Sprintf("%s%d", keyPrefix, i)])
 		val := strings.TrimSpace(formData[fmt.Sprintf("%s%d", valPrefix, i)])
 		if key != "" && val != "" {
