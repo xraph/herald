@@ -1,0 +1,165 @@
+package pages
+
+import (
+	"github.com/xraph/herald/dashboard/components"
+	"github.com/xraph/herald/preference"
+	"github.com/xraph/forgeui/components/badge"
+	"github.com/xraph/forgeui/components/card"
+	"github.com/xraph/forgeui/components/input"
+	"github.com/xraph/forgeui/components/table"
+)
+
+// PreferencesPageData holds data for the user preferences page.
+type PreferencesPageData struct {
+	Preference *preference.Preference
+	UserID     string
+	Error      string
+}
+
+// boolStatus returns "Opted Out" or "Active" based on a *bool value.
+func boolStatus(b *bool) string {
+	if b == nil {
+		return "Default"
+	}
+	if *b {
+		return "Active"
+	}
+	return "Opted Out"
+}
+
+// boolVariant returns the badge variant for a *bool preference.
+func boolVariant(b *bool) badge.Variant {
+	if b == nil {
+		return badge.VariantSecondary
+	}
+	if *b {
+		return badge.VariantDefault
+	}
+	return badge.VariantDestructive
+}
+
+templ PreferencesPage(data PreferencesPageData) {
+	<div class="space-y-6">
+		<!-- Header -->
+		<div>
+			<h1 class="text-3xl font-bold tracking-tight">Preferences</h1>
+			<p class="text-muted-foreground mt-1">View user notification preferences and opt-outs.</p>
+		</div>
+
+		<!-- Error Banner -->
+		@errorBanner(data.Error)
+
+		<!-- User ID Search -->
+		@card.Card(card.Props{Class: "rounded-sm"}) {
+			@card.Content(card.ContentProps{Class: "p-4"}) {
+				<div class="flex gap-3">
+					@input.Input(input.Props{
+						ID:          "user_id",
+						Name:        "user_id",
+						Type:        input.TypeText,
+						Placeholder: "Enter user ID to view preferences...",
+						Value:       data.UserID,
+						Attributes: templ.Attributes{
+							"hx-get":      "./preferences",
+							"hx-target":   "#content",
+							"hx-swap":     "innerHTML",
+							"hx-trigger":  "keyup changed delay:500ms",
+							"hx-include":  "this",
+							"hx-push-url": "true",
+						},
+					})
+				</div>
+			}
+		}
+
+		<!-- Preferences Content -->
+		if data.UserID == "" {
+			@components.EmptyState("users", "Enter a User ID", "Search for a user to view their notification preferences.")
+		} else if data.Preference == nil {
+			@components.EmptyState("users", "No preferences found", "This user has no custom notification preferences.")
+		} else {
+			<!-- General Info -->
+			@card.Card() {
+				@card.Header() {
+					@card.Title() {
+						Preference Details
+					}
+				}
+				@card.Content() {
+					<div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
+						@fieldRow("User ID", data.Preference.UserID)
+						@fieldRow("App ID", data.Preference.AppID)
+						@fieldRow("Created", formatDateTime(data.Preference.CreatedAt))
+						@fieldRow("Updated", formatDateTime(data.Preference.UpdatedAt))
+					</div>
+				}
+			}
+
+			<!-- Channel Overrides -->
+			if len(data.Preference.Overrides) > 0 {
+				@card.Card() {
+					@card.Header() {
+						@card.Title() {
+							Channel Overrides
+						}
+						@card.Description() {
+							Per-notification-type channel preferences.
+						}
+					}
+					@card.Content() {
+						@table.Table() {
+							@table.Header() {
+								@table.Row() {
+									@table.Head() {
+										Notification Type
+									}
+									@table.Head() {
+										Email
+									}
+									@table.Head() {
+										SMS
+									}
+									@table.Head() {
+										Push
+									}
+									@table.Head() {
+										In-App
+									}
+								}
+							}
+							@table.Body() {
+								for slug, cp := range data.Preference.Overrides {
+									@table.Row() {
+										@table.Cell() {
+											<code class="text-xs">{ slug }</code>
+										}
+										@table.Cell() {
+											@badge.Badge(badge.Props{Variant: boolVariant(cp.Email)}) {
+												{ boolStatus(cp.Email) }
+											}
+										}
+										@table.Cell() {
+											@badge.Badge(badge.Props{Variant: boolVariant(cp.SMS)}) {
+												{ boolStatus(cp.SMS) }
+											}
+										}
+										@table.Cell() {
+											@badge.Badge(badge.Props{Variant: boolVariant(cp.Push)}) {
+												{ boolStatus(cp.Push) }
+											}
+										}
+										@table.Cell() {
+											@badge.Badge(badge.Props{Variant: boolVariant(cp.InApp)}) {
+												{ boolStatus(cp.InApp) }
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	</div>
+}

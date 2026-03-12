@@ -1,0 +1,84 @@
+package components
+
+import (
+	"github.com/xraph/forgeui/components/card"
+	"github.com/xraph/forgeui/icons"
+)
+
+// resolveIcon returns the lucide icon component for the given icon name.
+func resolveIcon(iconName string, opts ...icons.Option) templ.Component {
+	switch iconName {
+	case "server":
+		return icons.Server(opts...)
+	case "file-text":
+		return icons.FileText(opts...)
+	case "send":
+		return icons.Send(opts...)
+	case "bell":
+		return icons.Bell(opts...)
+	case "check-circle":
+		return icons.CheckCircle(opts...)
+	case "x-circle":
+		return icons.XCircle(opts...)
+	case "clock":
+		return icons.Clock(opts...)
+	case "activity":
+		return icons.Activity(opts...)
+	case "mail":
+		return icons.Mail(opts...)
+	case "smartphone":
+		return icons.Smartphone(opts...)
+	case "inbox":
+		return icons.Inbox(opts...)
+	case "users":
+		return icons.Users(opts...)
+	case "plus":
+		return icons.Plus(opts...)
+	case "trash":
+		return icons.Trash(opts...)
+	case "edit":
+		return icons.Pencil(opts...)
+	case "eye":
+		return icons.Eye(opts...)
+	case "refresh-cw":
+		return icons.RefreshCw(opts...)
+	case "alert-triangle":
+		return icons.TriangleAlert(opts...)
+	case "chevron-left":
+		return icons.ChevronLeft(opts...)
+	case "message-square":
+		return icons.MessageSquare(opts...)
+	case "zap":
+		return icons.Zap(opts...)
+	case "globe":
+		return icons.Globe(opts...)
+	case "layout-dashboard":
+		return icons.LayoutDashboard(opts...)
+	case "settings":
+		return icons.Settings(opts...)
+	case "hash":
+		return icons.Hash(opts...)
+	case "link":
+		return icons.Link(opts...)
+	default:
+		return icons.Info(opts...)
+	}
+}
+
+// StatCard renders a dashboard statistics card with an icon, label, value, and optional subtitle.
+templ StatCard(iconName string, label string, value string, subtitle string) {
+	@card.Card() {
+		@card.Content(card.ContentProps{Class: "flex flex-col gap-1 p-6"}) {
+			<div class="flex items-center justify-between">
+				<span class="text-sm text-muted-foreground">{ label }</span>
+				<span class="text-muted-foreground">
+					@resolveIcon(iconName, icons.WithSize(16))
+				</span>
+			</div>
+			<div class="text-3xl font-bold">{ value }</div>
+			if subtitle != "" {
+				<span class="text-xs text-muted-foreground">{ subtitle }</span>
+			}
+		}
+	}
+}

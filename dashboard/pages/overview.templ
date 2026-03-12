@@ -1,0 +1,139 @@
+package pages
+
+import (
+	"strconv"
+
+	"github.com/xraph/herald/dashboard/components"
+	"github.com/xraph/herald/message"
+	"github.com/xraph/forgeui/components/button"
+	"github.com/xraph/forgeui/components/card"
+	"github.com/xraph/forgeui/icons"
+)
+
+// OverviewPageData holds all data for the overview dashboard.
+type OverviewPageData struct {
+	ProviderCount       int
+	ActiveProviderCount int
+	TemplateCount       int
+	MessageCount        int
+	FailedCount         int
+	PendingCount        int
+	ChannelBreakdown    map[string]int
+	RecentMessages      []*message.Message
+}
+
+// channelIcon returns an icon name for the given channel type.
+func channelIcon(channel string) string {
+	switch channel {
+	case "email":
+		return "mail"
+	case "sms":
+		return "smartphone"
+	case "push":
+		return "bell"
+	case "inapp":
+		return "inbox"
+	case "webhook":
+		return "globe"
+	case "chat":
+		return "message-square"
+	default:
+		return "send"
+	}
+}
+
+templ OverviewPage(data OverviewPageData) {
+	<div class="space-y-6">
+		<!-- Page Header -->
+		<div class="flex items-center justify-between">
+			<div>
+				<h1 class="text-3xl font-bold tracking-tight">Notifications Overview</h1>
+				<p class="text-muted-foreground mt-1">Monitor your notification delivery system at a glance.</p>
+			</div>
+			<div class="flex items-center gap-2">
+				@button.Button(button.Props{
+					Variant: button.VariantOutline,
+					Size:    button.SizeSm,
+					Attributes: templ.Attributes{
+						"hx-get":      "./send-test",
+						"hx-target":   "#content",
+						"hx-push-url": "true",
+						"hx-swap":     "innerHTML",
+					},
+				}) {
+					@icons.Send(icons.WithSize(16))
+					Send Test
+				}
+			</div>
+		</div>
+
+		<!-- Stats Grid -->
+		<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+			@components.StatCard("server", "Providers", strconv.Itoa(data.ProviderCount), strconv.Itoa(data.ActiveProviderCount)+" active")
+			@components.StatCard("file-text", "Templates", strconv.Itoa(data.TemplateCount), "Notification templates")
+			@components.StatCard("send", "Messages", strconv.Itoa(data.MessageCount), "Total sent")
+			@components.StatCard("x-circle", "Failed", strconv.Itoa(data.FailedCount), strconv.Itoa(data.PendingCount)+" pending")
+		</div>
+
+		<!-- Quick Actions -->
+		<div class="flex gap-3">
+			@button.Button(button.Props{
+				Variant: button.VariantOutline,
+				Size:    button.SizeSm,
+				Attributes: templ.Attributes{
+					"hx-get":      "./providers/create",
+					"hx-target":   "#content",
+					"hx-push-url": "true",
+					"hx-swap":     "innerHTML",
+				},
+			}) {
+				@icons.Plus(icons.WithSize(16))
+				Add Provider
+			}
+			@button.Button(button.Props{
+				Variant: button.VariantOutline,
+				Size:    button.SizeSm,
+				Attributes: templ.Attributes{
+					"hx-get":      "./templates/create",
+					"hx-target":   "#content",
+					"hx-push-url": "true",
+					"hx-swap":     "innerHTML",
+				},
+			}) {
+				@icons.Plus(icons.WithSize(16))
+				Create Template
+			}
+		</div>
+
+		<!-- Channel Breakdown -->
+		if len(data.ChannelBreakdown) > 0 {
+			<div class="space-y-3">
+				@sectionHeader("Channel Breakdown")
+				<div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+					for ch, count := range data.ChannelBreakdown {
+						@components.StatCard(channelIcon(ch), ch, strconv.Itoa(count), "messages")
+					}
+				</div>
+			</div>
+		}
+
+		<!-- Recent Messages -->
+		@card.Card() {
+			@card.Header() {
+				@card.Title() {
+					Recent Messages
+				}
+				@card.Description() {
+					The last 5 notification deliveries.
+				}
+			}
+			@card.Content() {
+				if len(data.RecentMessages) == 0 {
+					<p class="text-sm text-muted-foreground py-4 text-center">No messages yet.</p>
+				} else {
+					@components.MessageTable(data.RecentMessages, "./")
+				}
+			}
+		}
+	</div>
+}

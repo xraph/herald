@@ -1,0 +1,64 @@
+package components
+
+import (
+	"github.com/xraph/forgeui/components/table"
+
+	"github.com/xraph/herald/template"
+)
+
+templ TemplateTable(templates []*template.Template, basePath string) {
+	@table.Table() {
+		@table.Header() {
+			@table.Row() {
+				@table.Head() {
+					Name
+				}
+				@table.Head() {
+					Slug
+				}
+				@table.Head() {
+					Channel
+				}
+				@table.Head() {
+					Category
+				}
+				@table.Head() {
+					Status
+				}
+			}
+		}
+		@table.Body() {
+			for _, t := range templates {
+				@table.Row(table.RowProps{
+					Class: "cursor-pointer",
+					Attributes: templ.Attributes{
+						"hx-get":      basePath + "templates/detail?id=" + t.ID.String(),
+						"hx-target":   "#content",
+						"hx-push-url": "true",
+						"hx-swap":     "innerHTML",
+					},
+				}) {
+					@table.Cell() {
+						<span class="font-medium">{ t.Name }</span>
+					}
+					@table.Cell() {
+						<code class="text-xs">{ t.Slug }</code>
+					}
+					@table.Cell() {
+						@ChannelBadge(t.Channel)
+					}
+					@table.Cell() {
+						if t.Category != "" {
+							@CategoryBadge(t.Category)
+						} else {
+							<span class="text-muted-foreground">—</span>
+						}
+					}
+					@table.Cell() {
+						@EnabledBadge(t.Enabled)
+					}
+				}
+			}
+		}
+	}
+}

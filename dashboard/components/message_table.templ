@@ -1,0 +1,87 @@
+package components
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/xraph/forgeui/components/table"
+
+	"github.com/xraph/herald/message"
+)
+
+// msgTimeAgo returns a short relative time string for message timestamps.
+func msgTimeAgo(t time.Time) string {
+	d := time.Since(t)
+	if d < 0 {
+		d = -d
+	}
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	default:
+		return t.Format("Jan 02")
+	}
+}
+
+templ MessageTable(messages []*message.Message, basePath string) {
+	@table.Table() {
+		@table.Header() {
+			@table.Row() {
+				@table.Head() {
+					Recipient
+				}
+				@table.Head() {
+					Channel
+				}
+				@table.Head() {
+					Status
+				}
+				@table.Head() {
+					Template
+				}
+				@table.Head() {
+					Sent
+				}
+			}
+		}
+		@table.Body() {
+			for _, m := range messages {
+				@table.Row(table.RowProps{
+					Class: "cursor-pointer",
+					Attributes: templ.Attributes{
+						"hx-get":      basePath + "messages/detail?id=" + m.ID.String(),
+						"hx-target":   "#content",
+						"hx-push-url": "true",
+						"hx-swap":     "innerHTML",
+					},
+				}) {
+					@table.Cell() {
+						<span class="font-medium">{ m.Recipient }</span>
+					}
+					@table.Cell() {
+						@ChannelBadge(m.Channel)
+					}
+					@table.Cell() {
+						@MessageStatusBadge(string(m.Status))
+					}
+					@table.Cell() {
+						if m.TemplateID != "" {
+							<code class="text-xs">{ m.TemplateID }</code>
+						} else {
+							<span class="text-muted-foreground">—</span>
+						}
+					}
+					@table.Cell() {
+						{ msgTimeAgo(m.CreatedAt) }
+					}
+				}
+			}
+		}
+	}
+}

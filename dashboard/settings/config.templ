@@ -1,0 +1,101 @@
+package settings
+
+import (
+	"strconv"
+
+	"github.com/xraph/herald"
+	"github.com/xraph/forgeui/components/badge"
+	"github.com/xraph/forgeui/components/card"
+	"github.com/xraph/forgeui/components/table"
+)
+
+// ConfigDriverInfo holds driver name and channel for display in settings.
+type ConfigDriverInfo struct {
+	Name    string
+	Channel string
+}
+
+templ ConfigPanel(cfg herald.Config, driverNames []string, driverInfos []ConfigDriverInfo) {
+	<div class="space-y-6">
+		@card.Card() {
+			@card.Header() {
+				@card.Title() {
+					General Configuration
+				}
+				@card.Description() {
+					Current notification engine settings
+				}
+			}
+			@card.Content() {
+				<dl class="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
+					<dt class="text-muted-foreground">Default Locale</dt>
+					<dd class="font-medium">{ cfg.DefaultLocale }</dd>
+					<dt class="text-muted-foreground">Max Batch Size</dt>
+					<dd class="font-medium">{ strconv.Itoa(cfg.MaxBatchSize) }</dd>
+					if cfg.TruncateBodyAt > 0 {
+						<dt class="text-muted-foreground">Truncate Body At</dt>
+						<dd class="font-medium">{ strconv.Itoa(cfg.TruncateBodyAt) } chars</dd>
+					}
+				</dl>
+			}
+		}
+
+		if len(driverInfos) > 0 {
+			@card.Card() {
+				@card.Header() {
+					@card.Title() {
+						Registered Drivers
+					}
+					@card.Description() {
+						Available notification delivery drivers and their channels
+					}
+				}
+				@card.Content() {
+					@table.Table() {
+						@table.Header() {
+							@table.Row() {
+								@table.Head() {
+									Driver
+								}
+								@table.Head() {
+									Channel
+								}
+							}
+						}
+						@table.Body() {
+							for _, d := range driverInfos {
+								@table.Row() {
+									@table.Cell() {
+										<span class="font-medium">{ d.Name }</span>
+									}
+									@table.Cell() {
+										@badge.Badge(badge.Props{Variant: badge.VariantOutline}) {
+											{ d.Channel }
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		} else if len(driverNames) > 0 {
+			@card.Card() {
+				@card.Header() {
+					@card.Title() {
+						Registered Drivers
+					}
+				}
+				@card.Content() {
+					<div class="flex flex-wrap gap-2">
+						for _, name := range driverNames {
+							@badge.Badge(badge.Props{Variant: badge.VariantOutline}) {
+								{ name }
+							}
+						}
+					</div>
+				}
+			}
+		}
+	</div>
+}

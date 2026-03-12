@@ -1,0 +1,228 @@
+package pages
+
+import (
+	"github.com/xraph/forgeui/components/button"
+	"github.com/xraph/forgeui/components/card"
+	"github.com/xraph/forgeui/components/input"
+	"github.com/xraph/forgeui/components/label"
+	"github.com/xraph/forgeui/components/selectbox"
+	"github.com/xraph/forgeui/components/separator"
+	"github.com/xraph/forgeui/components/textarea"
+	"github.com/xraph/forgeui/icons"
+)
+
+// TemplateCreateData holds data for the template creation form.
+type TemplateCreateData struct {
+	Channels []string
+	Error    string
+}
+
+templ TemplateCreatePage(data TemplateCreateData) {
+	<div class="space-y-6">
+		<!-- Header -->
+		<div class="flex items-center gap-4">
+			<button
+				class="inline-flex items-center justify-center rounded-sm border border-input bg-background p-2 text-sm font-medium shadow-sm hover:bg-accent hover:text-accent-foreground"
+				hx-get="../templates"
+				hx-target="#content"
+				hx-push-url="true"
+				hx-swap="innerHTML"
+			>
+				@icons.ChevronLeft(icons.WithSize(16))
+			</button>
+			<div>
+				<h1 class="text-3xl font-bold tracking-tight">Create Template</h1>
+				<p class="text-muted-foreground mt-1">Define a new notification template with initial content.</p>
+			</div>
+		</div>
+
+		<!-- Error Banner -->
+		@errorBanner(data.Error)
+
+		<!-- Form -->
+		@card.Card(card.Props{Class: "rounded-sm"}) {
+			@card.Content(card.ContentProps{Class: "p-6"}) {
+				<form method="POST" class="space-y-6">
+					<input type="hidden" name="action" value="create_template"/>
+
+					<!-- Template Metadata Section -->
+					<div class="space-y-1">
+						<h3 class="text-lg font-semibold">Template Details</h3>
+						<p class="text-sm text-muted-foreground">Basic template metadata.</p>
+					</div>
+
+					<!-- Name & Slug -->
+					<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+						<div class="space-y-2">
+							@label.Label(label.Props{For: "name"}) {
+								Name
+							}
+							@input.Input(input.Props{
+								ID:          "name",
+								Name:        "name",
+								Type:        input.TypeText,
+								Placeholder: "e.g., Welcome Email",
+								Attributes:  templ.Attributes{"required": "true"},
+							})
+						</div>
+						<div class="space-y-2">
+							@label.Label(label.Props{For: "slug"}) {
+								Slug
+							}
+							@input.Input(input.Props{
+								ID:          "slug",
+								Name:        "slug",
+								Type:        input.TypeText,
+								Placeholder: "e.g., welcome-email",
+								Attributes:  templ.Attributes{"required": "true"},
+							})
+							<p class="text-xs text-muted-foreground">Unique identifier used in API calls.</p>
+						</div>
+					</div>
+
+					<!-- Channel & Category -->
+					<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+						<div class="space-y-2">
+							@label.Label(label.Props{For: "channel"}) {
+								Channel
+							}
+							@selectbox.SelectBox(selectbox.Props{}) {
+								@selectbox.Trigger(selectbox.TriggerProps{Name: "channel"}) {
+									@selectbox.Value(selectbox.ValueProps{Placeholder: "Select channel..."})
+								}
+								@selectbox.Content(selectbox.ContentProps{}) {
+									for _, ch := range data.Channels {
+										@selectbox.Item(selectbox.ItemProps{Value: ch}) {
+											{ ch }
+										}
+									}
+								}
+							}
+						</div>
+						<div class="space-y-2">
+							@label.Label(label.Props{For: "category"}) {
+								Category
+							}
+							@selectbox.SelectBox(selectbox.Props{}) {
+								@selectbox.Trigger(selectbox.TriggerProps{Name: "category"}) {
+									@selectbox.Value(selectbox.ValueProps{Placeholder: "Select category..."})
+								}
+								@selectbox.Content(selectbox.ContentProps{}) {
+									@selectbox.Item(selectbox.ItemProps{Value: "auth"}) {
+										Auth
+									}
+									@selectbox.Item(selectbox.ItemProps{Value: "transactional"}) {
+										Transactional
+									}
+									@selectbox.Item(selectbox.ItemProps{Value: "marketing"}) {
+										Marketing
+									}
+									@selectbox.Item(selectbox.ItemProps{Value: "system"}) {
+										System
+									}
+								}
+							}
+						</div>
+					</div>
+
+					@separator.Separator()
+
+					<!-- Initial Version Section -->
+					<div class="space-y-1">
+						<h3 class="text-lg font-semibold">Initial Content Version</h3>
+						<p class="text-sm text-muted-foreground">Define the default content for this template.</p>
+					</div>
+
+					<!-- Locale & Subject -->
+					<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+						<div class="space-y-2">
+							@label.Label(label.Props{For: "locale"}) {
+								Locale
+							}
+							@input.Input(input.Props{
+								ID:          "locale",
+								Name:        "locale",
+								Type:        input.TypeText,
+								Placeholder: "e.g., en, fr, de",
+								Value:       "en",
+							})
+							<p class="text-xs text-muted-foreground">BCP 47 language tag.</p>
+						</div>
+						<div class="space-y-2">
+							@label.Label(label.Props{For: "subject"}) {
+								Subject
+							}
+							@input.Input(input.Props{
+								ID:          "subject",
+								Name:        "subject",
+								Type:        input.TypeText,
+								Placeholder: "e.g., Welcome to {{.AppName}}",
+							})
+							<p class="text-xs text-muted-foreground">Email subject line. Supports template variables.</p>
+						</div>
+					</div>
+
+					<!-- Title (for push/inapp) -->
+					<div class="space-y-2">
+						@label.Label(label.Props{For: "title"}) {
+							Title
+						}
+						@input.Input(input.Props{
+							ID:          "title",
+							Name:        "title",
+							Type:        input.TypeText,
+							Placeholder: "Notification title (for push/in-app)",
+						})
+						<p class="text-xs text-muted-foreground">Used for push notifications and in-app messages.</p>
+					</div>
+
+					<!-- HTML Body -->
+					<div class="space-y-2">
+						@label.Label(label.Props{For: "html_body"}) {
+							HTML Body
+						}
+						@textarea.Textarea(textarea.Props{
+							ID:          "html_body",
+							Name:        "html_body",
+							Placeholder: "<html><body>Hello {{.Name}}</body></html>",
+							Rows:        8,
+						})
+						<p class="text-xs text-muted-foreground">HTML content for email notifications.</p>
+					</div>
+
+					<!-- Text Body -->
+					<div class="space-y-2">
+						@label.Label(label.Props{For: "text_body"}) {
+							Text Body
+						}
+						@textarea.Textarea(textarea.Props{
+							ID:          "text_body",
+							Name:        "text_body",
+							Placeholder: "Hello {{.Name}}, welcome to our platform.",
+							Rows:        4,
+						})
+						<p class="text-xs text-muted-foreground">Plain text fallback for email and SMS.</p>
+					</div>
+
+					<!-- Actions -->
+					<div class="flex items-center justify-end gap-3 pt-4 border-t">
+						<button
+							type="button"
+							class="inline-flex items-center justify-center rounded-sm border border-input bg-background px-4 py-2 text-sm font-medium shadow-sm hover:bg-accent hover:text-accent-foreground"
+							hx-get="../templates"
+							hx-target="#content"
+							hx-push-url="true"
+							hx-swap="innerHTML"
+						>
+							Cancel
+						</button>
+						@button.Button(button.Props{Type: button.TypeSubmit}) {
+							@icons.Plus(icons.WithSize(16))
+							Create Template
+						}
+					</div>
+				</form>
+			}
+		}
+	</div>
+}

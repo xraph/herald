@@ -1,0 +1,54 @@
+package components
+
+import (
+	"github.com/xraph/forgeui/components/table"
+
+	"github.com/xraph/herald/provider"
+)
+
+templ ProviderTable(providers []*provider.Provider, basePath string) {
+	@table.Table() {
+		@table.Header() {
+			@table.Row() {
+				@table.Head() {
+					Name
+				}
+				@table.Head() {
+					Channel
+				}
+				@table.Head() {
+					Driver
+				}
+				@table.Head() {
+					Status
+				}
+			}
+		}
+		@table.Body() {
+			for _, p := range providers {
+				@table.Row(table.RowProps{
+					Class: "cursor-pointer",
+					Attributes: templ.Attributes{
+						"hx-get":      basePath + "providers/detail?id=" + p.ID.String(),
+						"hx-target":   "#content",
+						"hx-push-url": "true",
+						"hx-swap":     "innerHTML",
+					},
+				}) {
+					@table.Cell() {
+						<span class="font-medium">{ p.Name }</span>
+					}
+					@table.Cell() {
+						@ChannelBadge(p.Channel)
+					}
+					@table.Cell() {
+						{ p.Driver }
+					}
+					@table.Cell() {
+						@EnabledBadge(p.Enabled)
+					}
+				}
+			}
+		}
+	}
+}

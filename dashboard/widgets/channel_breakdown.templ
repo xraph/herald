@@ -1,0 +1,39 @@
+package widgets
+
+import (
+	"strconv"
+
+	"github.com/xraph/herald/dashboard/components"
+)
+
+// channelWidgetIcon returns an icon name for the given channel type.
+func channelWidgetIcon(channel string) string {
+	switch channel {
+	case "email":
+		return "mail"
+	case "sms":
+		return "smartphone"
+	case "push":
+		return "bell"
+	case "inapp":
+		return "inbox"
+	case "webhook":
+		return "globe"
+	case "chat":
+		return "message-square"
+	default:
+		return "send"
+	}
+}
+
+templ ChannelBreakdownWidget(breakdown map[string]int) {
+	if len(breakdown) == 0 {
+		<div class="text-sm text-muted-foreground text-center py-4">No channel data yet.</div>
+	} else {
+		<div class="grid grid-cols-3 gap-4">
+			for ch, count := range breakdown {
+				@components.StatCard(channelWidgetIcon(ch), ch, strconv.Itoa(count), "messages")
+			}
+		</div>
+	}
+}

@@ -1,0 +1,207 @@
+package pages
+
+import (
+	"strconv"
+
+	"github.com/xraph/forgeui/components/button"
+	"github.com/xraph/forgeui/components/card"
+	"github.com/xraph/forgeui/components/input"
+	"github.com/xraph/forgeui/components/label"
+	"github.com/xraph/forgeui/components/selectbox"
+	"github.com/xraph/forgeui/icons"
+)
+
+// ProviderDriverInfo holds driver name and channel for display in the create form.
+type ProviderDriverInfo struct {
+	Name    string
+	Channel string
+}
+
+// ProviderCreateData holds data for the provider creation form.
+type ProviderCreateData struct {
+	Drivers  []ProviderDriverInfo
+	Channels []string
+	Error    string
+}
+
+templ ProviderCreatePage(data ProviderCreateData) {
+	<div class="space-y-6">
+		<!-- Header -->
+		<div class="flex items-center gap-4">
+			<button
+				class="inline-flex items-center justify-center rounded-sm border border-input bg-background p-2 text-sm font-medium shadow-sm hover:bg-accent hover:text-accent-foreground"
+				hx-get="../providers"
+				hx-target="#content"
+				hx-push-url="true"
+				hx-swap="innerHTML"
+			>
+				@icons.ChevronLeft(icons.WithSize(16))
+			</button>
+			<div>
+				<h1 class="text-3xl font-bold tracking-tight">Create Provider</h1>
+				<p class="text-muted-foreground mt-1">Configure a new notification delivery provider.</p>
+			</div>
+		</div>
+
+		<!-- Error Banner -->
+		@errorBanner(data.Error)
+
+		<!-- Form -->
+		@card.Card(card.Props{Class: "rounded-sm"}) {
+			@card.Content(card.ContentProps{Class: "p-6"}) {
+				<form method="POST" class="space-y-6">
+					<input type="hidden" name="action" value="create_provider"/>
+
+					<!-- Name & Channel -->
+					<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+						<div class="space-y-2">
+							@label.Label(label.Props{For: "name"}) {
+								Name
+							}
+							@input.Input(input.Props{
+								ID:          "name",
+								Name:        "name",
+								Type:        input.TypeText,
+								Placeholder: "e.g., SendGrid Production",
+								Attributes:  templ.Attributes{"required": "true"},
+							})
+						</div>
+						<div class="space-y-2">
+							@label.Label(label.Props{For: "channel"}) {
+								Channel
+							}
+							@selectbox.SelectBox(selectbox.Props{}) {
+								@selectbox.Trigger(selectbox.TriggerProps{Name: "channel"}) {
+									@selectbox.Value(selectbox.ValueProps{Placeholder: "Select channel..."})
+								}
+								@selectbox.Content(selectbox.ContentProps{}) {
+									for _, ch := range data.Channels {
+										@selectbox.Item(selectbox.ItemProps{Value: ch}) {
+											{ ch }
+										}
+									}
+								}
+							}
+						</div>
+					</div>
+
+					<!-- Driver & Priority -->
+					<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+						<div class="space-y-2">
+							@label.Label(label.Props{For: "driver"}) {
+								Driver
+							}
+							@selectbox.SelectBox(selectbox.Props{}) {
+								@selectbox.Trigger(selectbox.TriggerProps{Name: "driver"}) {
+									@selectbox.Value(selectbox.ValueProps{Placeholder: "Select driver..."})
+								}
+								@selectbox.Content(selectbox.ContentProps{}) {
+									for _, d := range data.Drivers {
+										@selectbox.Item(selectbox.ItemProps{Value: d.Name}) {
+											<div class="flex flex-col">
+												<span>{ d.Name }</span>
+												<span class="text-xs text-muted-foreground">{ d.Channel }</span>
+											</div>
+										}
+									}
+								}
+							}
+							<p class="text-xs text-muted-foreground">The delivery driver to use.</p>
+						</div>
+						<div class="space-y-2">
+							@label.Label(label.Props{For: "priority"}) {
+								Priority
+							}
+							@input.Input(input.Props{
+								ID:          "priority",
+								Name:        "priority",
+								Type:        input.TypeNumber,
+								Placeholder: "0",
+								Value:       "0",
+							})
+							<p class="text-xs text-muted-foreground">Lower values = higher priority.</p>
+						</div>
+					</div>
+
+					<!-- Credentials -->
+					<div class="space-y-3">
+						<div>
+							@label.Label(label.Props{}) {
+								Credentials
+							}
+							<p class="text-xs text-muted-foreground">API keys, tokens, or other authentication credentials.</p>
+						</div>
+						for i := range 3 {
+							@credentialRow(i)
+						}
+					</div>
+
+					<!-- Settings -->
+					<div class="space-y-3">
+						<div>
+							@label.Label(label.Props{}) {
+								Settings
+							}
+							<p class="text-xs text-muted-foreground">Additional provider-specific configuration.</p>
+						</div>
+						for i := range 3 {
+							@settingRow(i)
+						}
+					</div>
+
+					<!-- Actions -->
+					<div class="flex items-center justify-end gap-3 pt-4 border-t">
+						<button
+							type="button"
+							class="inline-flex items-center justify-center rounded-sm border border-input bg-background px-4 py-2 text-sm font-medium shadow-sm hover:bg-accent hover:text-accent-foreground"
+							hx-get="../providers"
+							hx-target="#content"
+							hx-push-url="true"
+							hx-swap="innerHTML"
+						>
+							Cancel
+						</button>
+						@button.Button(button.Props{Type: button.TypeSubmit}) {
+							@icons.Plus(icons.WithSize(16))
+							Create Provider
+						}
+					</div>
+				</form>
+			}
+		}
+	</div>
+}
+
+templ credentialRow(index int) {
+	{{ keyName := "cred_key_" + strconv.Itoa(index) }}
+	{{ valueName := "cred_value_" + strconv.Itoa(index) }}
+	<div class="grid grid-cols-2 gap-3">
+		@input.Input(input.Props{
+			Name:        keyName,
+			Type:        input.TypeText,
+			Placeholder: "Key (e.g., api_key)",
+		})
+		@input.Input(input.Props{
+			Name:        valueName,
+			Type:        input.TypeText,
+			Placeholder: "Value",
+		})
+	</div>
+}
+
+templ settingRow(index int) {
+	{{ keyName := "setting_key_" + strconv.Itoa(index) }}
+	{{ valueName := "setting_value_" + strconv.Itoa(index) }}
+	<div class="grid grid-cols-2 gap-3">
+		@input.Input(input.Props{
+			Name:        keyName,
+			Type:        input.TypeText,
+			Placeholder: "Key (e.g., region)",
+		})
+		@input.Input(input.Props{
+			Name:        valueName,
+			Type:        input.TypeText,
+			Placeholder: "Value",
+		})
+	</div>
+}

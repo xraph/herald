@@ -1,0 +1,14 @@
+package widgets
+
+import (
+	"github.com/xraph/herald/dashboard/components"
+	"github.com/xraph/herald/message"
+)
+
+templ RecentMessagesWidget(messages []*message.Message) {
+	if len(messages) == 0 {
+		<p class="text-sm text-muted-foreground py-4 text-center">No recent messages.</p>
+	} else {
+		@components.MessageTable(messages, "./")
+	}
+}

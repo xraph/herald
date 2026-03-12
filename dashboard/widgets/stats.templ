@@ -1,0 +1,15 @@
+package widgets
+
+import (
+	"strconv"
+
+	"github.com/xraph/herald/dashboard/components"
+)
+
+templ StatsWidget(providerCount int, activeProviderCount int, templateCount int, messageCount int) {
+	<div class="grid grid-cols-3 gap-4">
+		@components.StatCard("server", "Providers", strconv.Itoa(providerCount), strconv.Itoa(activeProviderCount)+" active")
+		@components.StatCard("file-text", "Templates", strconv.Itoa(templateCount), "")
+		@components.StatCard("send", "Messages", strconv.Itoa(messageCount), "Total sent")
+	</div>
+}

@@ -1,0 +1,15 @@
+package widgets
+
+import (
+	"strconv"
+
+	"github.com/xraph/herald/dashboard/components"
+)
+
+templ DeliveryStatusWidget(sent int, failed int, pending int, successRate int) {
+	<div class="grid grid-cols-3 gap-4">
+		@components.StatCard("check-circle", "Sent", strconv.Itoa(sent), strconv.Itoa(successRate)+"% success rate")
+		@components.StatCard("x-circle", "Failed", strconv.Itoa(failed), "Delivery failed")
+		@components.StatCard("clock", "Pending", strconv.Itoa(pending), "In progress")
+	</div>
+}

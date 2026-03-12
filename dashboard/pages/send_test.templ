@@ -1,0 +1,160 @@
+package pages
+
+import (
+	"github.com/xraph/herald"
+	"github.com/xraph/forgeui/components/button"
+	"github.com/xraph/forgeui/components/card"
+	"github.com/xraph/forgeui/components/input"
+	"github.com/xraph/forgeui/components/label"
+	"github.com/xraph/forgeui/components/selectbox"
+	"github.com/xraph/forgeui/components/textarea"
+	"github.com/xraph/forgeui/icons"
+)
+
+// SendTestPageData holds data for the test notification page.
+type SendTestPageData struct {
+	Channels []string
+	Result   *herald.SendResult
+	Error    string
+	Success  bool
+}
+
+templ SendTestPage(data SendTestPageData) {
+	<div class="space-y-6">
+		<!-- Header -->
+		<div class="flex items-center gap-4">
+			<button
+				class="inline-flex items-center justify-center rounded-sm border border-input bg-background p-2 text-sm font-medium shadow-sm hover:bg-accent hover:text-accent-foreground"
+				hx-get="./"
+				hx-target="#content"
+				hx-push-url="true"
+				hx-swap="innerHTML"
+			>
+				@icons.ChevronLeft(icons.WithSize(16))
+			</button>
+			<div>
+				<h1 class="text-3xl font-bold tracking-tight">Send Test Notification</h1>
+				<p class="text-muted-foreground mt-1">Send a test notification to verify your setup.</p>
+			</div>
+		</div>
+
+		<!-- Error / Success Banner -->
+		@errorBanner(data.Error)
+		if data.Success {
+			@successBanner("Test notification sent successfully!")
+		}
+
+		<!-- Result Details -->
+		if data.Result != nil {
+			@card.Card() {
+				@card.Header() {
+					@card.Title() {
+						Send Result
+					}
+				}
+				@card.Content() {
+					<div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
+						@fieldRow("Message ID", data.Result.MessageID.String())
+						@fieldRow("Status", string(data.Result.Status))
+						if data.Result.ProviderID != "" {
+							@fieldRow("Provider", data.Result.ProviderID)
+						}
+						if data.Result.Error != "" {
+							@fieldRow("Error", data.Result.Error)
+						}
+					</div>
+				}
+			}
+		}
+
+		<!-- Form -->
+		@card.Card(card.Props{Class: "rounded-sm"}) {
+			@card.Content(card.ContentProps{Class: "p-6"}) {
+				<form method="POST" class="space-y-6">
+					<input type="hidden" name="action" value="send_test"/>
+
+					<!-- Channel & Recipient -->
+					<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+						<div class="space-y-2">
+							@label.Label(label.Props{For: "channel"}) {
+								Channel
+							}
+							@selectbox.SelectBox(selectbox.Props{}) {
+								@selectbox.Trigger(selectbox.TriggerProps{Name: "channel"}) {
+									@selectbox.Value(selectbox.ValueProps{Placeholder: "Select channel..."})
+								}
+								@selectbox.Content(selectbox.ContentProps{}) {
+									for _, ch := range data.Channels {
+										@selectbox.Item(selectbox.ItemProps{Value: ch}) {
+											{ ch }
+										}
+									}
+								}
+							}
+						</div>
+						<div class="space-y-2">
+							@label.Label(label.Props{For: "recipient"}) {
+								Recipient
+							}
+							@input.Input(input.Props{
+								ID:          "recipient",
+								Name:        "recipient",
+								Type:        input.TypeText,
+								Placeholder: "e.g., user@example.com or +1234567890",
+								Attributes:  templ.Attributes{"required": "true"},
+							})
+						</div>
+					</div>
+
+					<!-- Template Slug (optional) -->
+					<div class="space-y-2">
+						@label.Label(label.Props{For: "template_slug"}) {
+							Template Slug (optional)
+						}
+						@input.Input(input.Props{
+							ID:          "template_slug",
+							Name:        "template_slug",
+							Type:        input.TypeText,
+							Placeholder: "e.g., welcome-email (leave blank for raw message)",
+						})
+						<p class="text-xs text-muted-foreground">If set, the template's content will be used instead of subject/body below.</p>
+					</div>
+
+					<!-- Subject -->
+					<div class="space-y-2">
+						@label.Label(label.Props{For: "subject"}) {
+							Subject
+						}
+						@input.Input(input.Props{
+							ID:          "subject",
+							Name:        "subject",
+							Type:        input.TypeText,
+							Placeholder: "Test notification subject",
+						})
+					</div>
+
+					<!-- Body -->
+					<div class="space-y-2">
+						@label.Label(label.Props{For: "body"}) {
+							Body
+						}
+						@textarea.Textarea(textarea.Props{
+							ID:          "body",
+							Name:        "body",
+							Placeholder: "Test notification body content...",
+							Rows:        5,
+						})
+					</div>
+
+					<!-- Actions -->
+					<div class="flex items-center justify-end gap-3 pt-4 border-t">
+						@button.Button(button.Props{Type: button.TypeSubmit}) {
+							@icons.Send(icons.WithSize(16))
+							Send Test
+						}
+					</div>
+				</form>
+			}
+		}
+	</div>
+}

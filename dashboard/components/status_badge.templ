@@ -1,0 +1,75 @@
+package components
+
+import (
+	"github.com/xraph/forgeui/components/badge"
+)
+
+// MessageStatusBadge renders a delivery status badge with appropriate styling.
+templ MessageStatusBadge(status string) {
+	switch status {
+		case "sent", "delivered":
+			@badge.Badge(badge.Props{Variant: badge.VariantDefault}) {
+				{ status }
+			}
+		case "failed", "bounced":
+			@badge.Badge(badge.Props{Variant: badge.VariantDestructive}) {
+				{ status }
+			}
+		default:
+			@badge.Badge(badge.Props{Variant: badge.VariantSecondary}) {
+				{ status }
+			}
+	}
+}
+
+// EnabledBadge renders an enabled/disabled status badge.
+templ EnabledBadge(enabled bool) {
+	if enabled {
+		@badge.Badge(badge.Props{Variant: badge.VariantDefault}) {
+			Active
+		}
+	} else {
+		@badge.Badge(badge.Props{Variant: badge.VariantSecondary}) {
+			Disabled
+		}
+	}
+}
+
+// ReadBadge renders a read/unread status badge.
+templ ReadBadge(read bool) {
+	if read {
+		@badge.Badge(badge.Props{Variant: badge.VariantSecondary}) {
+			Read
+		}
+	} else {
+		@badge.Badge(badge.Props{Variant: badge.VariantDefault}) {
+			Unread
+		}
+	}
+}
+
+// CategoryBadge renders a template category badge.
+templ CategoryBadge(category string) {
+	switch category {
+		case "auth":
+			@badge.Badge(badge.Props{Variant: badge.VariantDefault}) {
+				Auth
+			}
+		case "transactional":
+			@badge.Badge(badge.Props{Variant: badge.VariantDefault}) {
+				Transactional
+			}
+		case "marketing":
+			@badge.Badge(badge.Props{Variant: badge.VariantSecondary}) {
+				Marketing
+			}
+		case "system":
+			@badge.Badge(badge.Props{Variant: badge.VariantOutline}) {
+				System
+			}
+		default:
+			@badge.Badge(badge.Props{Variant: badge.VariantOutline}) {
+				{ category }
+			}
+	}
+}

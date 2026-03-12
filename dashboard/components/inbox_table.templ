@@ -1,0 +1,78 @@
+package components
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/xraph/forgeui/components/table"
+
+	"github.com/xraph/herald/inbox"
+)
+
+// truncateStr shortens s to maxLen characters for table display.
+func truncateStr(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
+// inboxTimeAgo returns a human-readable relative time string.
+func inboxTimeAgo(t time.Time) string {
+	d := time.Since(t)
+	if d < 0 {
+		d = -d
+	}
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	default:
+		return t.Format("2006-01-02")
+	}
+}
+
+// InboxTable renders a table of inbox notifications.
+templ InboxTable(notifications []*inbox.Notification, basePath string) {
+	@table.Table() {
+		@table.Header() {
+			@table.Row() {
+				@table.Head() {
+					Title
+				}
+				@table.Head() {
+					Type
+				}
+				@table.Head() {
+					Status
+				}
+				@table.Head() {
+					Created
+				}
+			}
+		}
+		@table.Body() {
+			for _, n := range notifications {
+				@table.Row() {
+					@table.Cell() {
+						<span class="font-medium">{ truncateStr(n.Title, 40) }</span>
+					}
+					@table.Cell() {
+						{ n.Type }
+					}
+					@table.Cell() {
+						@ReadBadge(n.Read)
+					}
+					@table.Cell() {
+						<span class="text-muted-foreground">{ inboxTimeAgo(n.CreatedAt) }</span>
+					}
+				}
+			}
+		}
+	}
+}

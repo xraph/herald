@@ -1,0 +1,99 @@
+package pages
+
+import (
+	"strconv"
+
+	"github.com/xraph/herald/dashboard/components"
+	"github.com/xraph/herald/provider"
+	"github.com/xraph/forgeui/components/badge"
+	"github.com/xraph/forgeui/components/button"
+	"github.com/xraph/forgeui/components/card"
+	"github.com/xraph/forgeui/icons"
+)
+
+// ProvidersPageData holds data for the providers list page.
+type ProvidersPageData struct {
+	Providers     []*provider.Provider
+	ChannelFilter string
+}
+
+templ ProvidersPage(data ProvidersPageData) {
+	<div class="space-y-6">
+		<!-- Header -->
+		<div class="flex items-center justify-between">
+			<div>
+				<h1 class="text-3xl font-bold tracking-tight">Providers</h1>
+				<p class="text-muted-foreground mt-1">Manage notification delivery providers.</p>
+			</div>
+			<div class="flex items-center gap-2">
+				@badge.Badge(badge.Props{Variant: badge.VariantSecondary}) {
+					{ strconv.Itoa(len(data.Providers)) } providers
+				}
+				@button.Button(button.Props{
+					Size: button.SizeSm,
+					Attributes: templ.Attributes{
+						"hx-get":      "./providers/create",
+						"hx-target":   "#content",
+						"hx-push-url": "true",
+						"hx-swap":     "innerHTML",
+					},
+				}) {
+					@icons.Plus(icons.WithSize(16))
+					Add Provider
+				}
+			</div>
+		</div>
+
+		<!-- Channel Filters -->
+		<div class="flex gap-2">
+			@channelFilterButton("All", "", data.ChannelFilter)
+			@channelFilterButton("Email", "email", data.ChannelFilter)
+			@channelFilterButton("SMS", "sms", data.ChannelFilter)
+			@channelFilterButton("Push", "push", data.ChannelFilter)
+			@channelFilterButton("In-App", "inapp", data.ChannelFilter)
+			@channelFilterButton("Webhook", "webhook", data.ChannelFilter)
+			@channelFilterButton("Chat", "chat", data.ChannelFilter)
+		</div>
+
+		<!-- Table -->
+		@card.Card(card.Props{Class: "rounded-sm"}) {
+			@card.Content() {
+				if len(data.Providers) == 0 {
+					@components.EmptyState("server", "No providers found", "Create a provider to start sending notifications.")
+				} else {
+					@components.ProviderTable(data.Providers, "./")
+				}
+			}
+		}
+	</div>
+}
+
+templ channelFilterButton(label string, channel string, currentFilter string) {
+	if channel == currentFilter {
+		@button.Button(button.Props{
+			Variant: button.VariantDefault,
+			Size:    button.SizeSm,
+			Attributes: templ.Attributes{
+				"hx-get":      ".?channel=",
+				"hx-target":   "closest div.space-y-6",
+				"hx-swap":     "outerHTML",
+				"hx-push-url": "true",
+			},
+		}) {
+			{ label }
+		}
+	} else {
+		@button.Button(button.Props{
+			Variant: button.VariantOutline,
+			Size:    button.SizeSm,
+			Attributes: templ.Attributes{
+				"hx-get":      ".?channel=" + channel,
+				"hx-target":   "closest div.space-y-6",
+				"hx-swap":     "outerHTML",
+				"hx-push-url": "true",
+			},
+		}) {
+			{ label }
+		}
+	}
+}

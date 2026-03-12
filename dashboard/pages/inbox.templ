@@ -1,0 +1,92 @@
+package pages
+
+import (
+	"strconv"
+
+	"github.com/xraph/herald/dashboard/components"
+	"github.com/xraph/herald/inbox"
+	"github.com/xraph/forgeui/components/badge"
+	"github.com/xraph/forgeui/components/button"
+	"github.com/xraph/forgeui/components/card"
+	"github.com/xraph/forgeui/components/input"
+	"github.com/xraph/forgeui/icons"
+)
+
+// InboxPageData holds data for the inbox management page.
+type InboxPageData struct {
+	Notifications []*inbox.Notification
+	UserID        string
+	UnreadCount   int
+	Error         string
+}
+
+templ InboxPage(data InboxPageData) {
+	<div class="space-y-6">
+		<!-- Header -->
+		<div class="flex items-center justify-between">
+			<div>
+				<h1 class="text-3xl font-bold tracking-tight">Inbox</h1>
+				<p class="text-muted-foreground mt-1">Manage in-app notifications for users.</p>
+			</div>
+			if data.UserID != "" && data.UnreadCount > 0 {
+				<div class="flex items-center gap-2">
+					@badge.Badge(badge.Props{Variant: badge.VariantSecondary}) {
+						{ strconv.Itoa(data.UnreadCount) } unread
+					}
+					@button.Button(button.Props{
+						Variant: button.VariantOutline,
+						Size:    button.SizeSm,
+						Attributes: templ.Attributes{
+							"hx-get":      "./inbox?user_id=" + data.UserID + "&action=mark_all_read",
+							"hx-target":   "#content",
+							"hx-swap":     "innerHTML",
+							"hx-confirm":  "Mark all notifications as read?",
+						},
+					}) {
+						@icons.CheckCircle(icons.WithSize(16))
+						Mark All Read
+					}
+				</div>
+			}
+		</div>
+
+		<!-- Error Banner -->
+		@errorBanner(data.Error)
+
+		<!-- User ID Search -->
+		@card.Card(card.Props{Class: "rounded-sm"}) {
+			@card.Content(card.ContentProps{Class: "p-4"}) {
+				<div class="flex gap-3">
+					@input.Input(input.Props{
+						ID:          "user_id",
+						Name:        "user_id",
+						Type:        input.TypeText,
+						Placeholder: "Enter user ID to view inbox...",
+						Value:       data.UserID,
+						Attributes: templ.Attributes{
+							"hx-get":      "./inbox",
+							"hx-target":   "#content",
+							"hx-swap":     "innerHTML",
+							"hx-trigger":  "keyup changed delay:500ms",
+							"hx-include":  "this",
+							"hx-push-url": "true",
+						},
+					})
+				</div>
+			}
+		}
+
+		<!-- Inbox Content -->
+		if data.UserID == "" {
+			@components.EmptyState("inbox", "Enter a User ID", "Search for a user to view their in-app notifications.")
+		} else if len(data.Notifications) == 0 {
+			@components.EmptyState("inbox", "No notifications", "This user has no in-app notifications.")
+		} else {
+			@card.Card(card.Props{Class: "rounded-sm"}) {
+				@card.Content() {
+					@components.InboxTable(data.Notifications, "./")
+				}
+			}
+		}
+	</div>
+}

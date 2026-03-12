@@ -1,0 +1,174 @@
+package pages
+
+import (
+	"strconv"
+
+	"github.com/xraph/herald/dashboard/components"
+	"github.com/xraph/herald/provider"
+	"github.com/xraph/forgeui/components/button"
+	"github.com/xraph/forgeui/components/card"
+	"github.com/xraph/forgeui/icons"
+)
+
+// ProviderDetailPageData holds data for the provider detail page.
+type ProviderDetailPageData struct {
+	Provider *provider.Provider
+	Error    string
+}
+
+templ ProviderDetailPage(data ProviderDetailPageData) {
+	if data.Provider == nil {
+		@errorBanner("Provider not found.")
+	} else {
+	<div class="space-y-6">
+		<!-- Header with Back & Actions -->
+		<div class="flex items-center justify-between">
+			<div class="flex items-center gap-4">
+				<button
+					class="inline-flex items-center justify-center rounded-sm border border-input bg-background p-2 text-sm font-medium shadow-sm hover:bg-accent hover:text-accent-foreground"
+					hx-get="../providers"
+					hx-target="#content"
+					hx-push-url="true"
+					hx-swap="innerHTML"
+				>
+					@icons.ChevronLeft(icons.WithSize(16))
+				</button>
+				<div>
+					<h1 class="text-3xl font-bold tracking-tight">{ data.Provider.Name }</h1>
+					<p class="text-muted-foreground mt-1">Provider details and configuration.</p>
+				</div>
+			</div>
+			<div class="flex items-center gap-2">
+				if data.Provider.Enabled {
+					@button.Button(button.Props{
+						Variant: button.VariantOutline,
+						Size:    button.SizeSm,
+						Attributes: templ.Attributes{
+							"hx-get":      "./detail?id=" + data.Provider.ID.String() + "&action=disable",
+							"hx-target":   "#content",
+							"hx-swap":     "innerHTML",
+							"hx-confirm":  "Disable this provider? It will stop handling notifications.",
+						},
+					}) {
+						Disable
+					}
+				} else {
+					@button.Button(button.Props{
+						Variant: button.VariantOutline,
+						Size:    button.SizeSm,
+						Attributes: templ.Attributes{
+							"hx-get":      "./detail?id=" + data.Provider.ID.String() + "&action=enable",
+							"hx-target":   "#content",
+							"hx-swap":     "innerHTML",
+						},
+					}) {
+						Enable
+					}
+				}
+				@button.Button(button.Props{
+					Variant: button.VariantDestructive,
+					Size:    button.SizeSm,
+					Attributes: templ.Attributes{
+						"hx-get":      "./detail?id=" + data.Provider.ID.String() + "&action=delete",
+						"hx-target":   "#content",
+						"hx-swap":     "innerHTML",
+						"hx-confirm":  "Delete this provider? This action cannot be undone.",
+					},
+				}) {
+					@icons.Trash(icons.WithSize(16))
+					Delete
+				}
+			</div>
+		</div>
+
+		<!-- Error Banner -->
+		@errorBanner(data.Error)
+
+		<!-- Provider Information -->
+		@card.Card() {
+			@card.Header() {
+				@card.Title() {
+					Provider Information
+				}
+			}
+			@card.Content() {
+				<div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
+					@fieldRow("ID", data.Provider.ID.String())
+					@fieldRow("Driver", data.Provider.Driver)
+					@fieldRow("Priority", strconv.Itoa(data.Provider.Priority))
+					<div>
+						<dt class="text-sm font-medium text-muted-foreground">Status</dt>
+						<dd class="mt-1">
+							@components.EnabledBadge(data.Provider.Enabled)
+						</dd>
+					</div>
+					<div>
+						<dt class="text-sm font-medium text-muted-foreground">Channel</dt>
+						<dd class="mt-1">
+							@components.ChannelBadge(data.Provider.Channel)
+						</dd>
+					</div>
+					@fieldRow("Created", formatDateTime(data.Provider.CreatedAt))
+					@fieldRow("Updated", formatDateTime(data.Provider.UpdatedAt))
+				</div>
+			}
+		}
+
+		<!-- Settings -->
+		if len(data.Provider.Settings) > 0 {
+			@card.Card() {
+				@card.Header() {
+					@card.Title() {
+						Settings
+					}
+				}
+				@card.Content() {
+					<div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
+						for k, v := range data.Provider.Settings {
+							@fieldRow(k, v)
+						}
+					</div>
+				}
+			}
+		}
+
+		<!-- Credentials (masked) -->
+		if len(data.Provider.Credentials) > 0 {
+			@card.Card() {
+				@card.Header() {
+					@card.Title() {
+						Credentials
+					}
+					@card.Description() {
+						Credential values are masked for security.
+					}
+				}
+				@card.Content() {
+					<div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
+						for k, v := range data.Provider.Credentials {
+							@fieldRow(k, maskCredential(v))
+						}
+					</div>
+				}
+			}
+		}
+
+		<!-- Quick Links -->
+		<div class="flex gap-3">
+			@button.Button(button.Props{
+				Variant: button.VariantOutline,
+				Size:    button.SizeSm,
+				Attributes: templ.Attributes{
+					"hx-get":      "../messages?channel=" + data.Provider.Channel,
+					"hx-target":   "#content",
+					"hx-push-url": "true",
+					"hx-swap":     "innerHTML",
+				},
+			}) {
+				@icons.Send(icons.WithSize(16))
+				View Messages
+			}
+		</div>
+	</div>
+	}
+}

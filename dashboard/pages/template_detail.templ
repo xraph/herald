@@ -1,0 +1,231 @@
+package pages
+
+import (
+	"github.com/xraph/herald/dashboard/components"
+	"github.com/xraph/herald/template"
+	"github.com/xraph/forgeui/components/badge"
+	"github.com/xraph/forgeui/components/button"
+	"github.com/xraph/forgeui/components/card"
+	"github.com/xraph/forgeui/components/table"
+	"github.com/xraph/forgeui/icons"
+)
+
+// TemplateDetailPageData holds data for the template detail page.
+type TemplateDetailPageData struct {
+	Template *template.Template
+	Versions []*template.Version
+	Error    string
+}
+
+templ TemplateDetailPage(data TemplateDetailPageData) {
+	if data.Template == nil {
+		@errorBanner("Template not found.")
+	} else {
+	<div class="space-y-6">
+		<!-- Header with Back & Actions -->
+		<div class="flex items-center justify-between">
+			<div class="flex items-center gap-4">
+				<button
+					class="inline-flex items-center justify-center rounded-sm border border-input bg-background p-2 text-sm font-medium shadow-sm hover:bg-accent hover:text-accent-foreground"
+					hx-get="../templates"
+					hx-target="#content"
+					hx-push-url="true"
+					hx-swap="innerHTML"
+				>
+					@icons.ChevronLeft(icons.WithSize(16))
+				</button>
+				<div>
+					<h1 class="text-3xl font-bold tracking-tight">{ data.Template.Name }</h1>
+					<p class="text-muted-foreground mt-1">Template details and versions.</p>
+				</div>
+			</div>
+			<div class="flex items-center gap-2">
+				if data.Template.Enabled {
+					@button.Button(button.Props{
+						Variant: button.VariantOutline,
+						Size:    button.SizeSm,
+						Attributes: templ.Attributes{
+							"hx-get":      "./detail?id=" + data.Template.ID.String() + "&action=disable",
+							"hx-target":   "#content",
+							"hx-swap":     "innerHTML",
+							"hx-confirm":  "Disable this template?",
+						},
+					}) {
+						Disable
+					}
+				} else {
+					@button.Button(button.Props{
+						Variant: button.VariantOutline,
+						Size:    button.SizeSm,
+						Attributes: templ.Attributes{
+							"hx-get":      "./detail?id=" + data.Template.ID.String() + "&action=enable",
+							"hx-target":   "#content",
+							"hx-swap":     "innerHTML",
+						},
+					}) {
+						Enable
+					}
+				}
+				@button.Button(button.Props{
+					Variant: button.VariantDestructive,
+					Size:    button.SizeSm,
+					Attributes: templ.Attributes{
+						"hx-get":      "./detail?id=" + data.Template.ID.String() + "&action=delete",
+						"hx-target":   "#content",
+						"hx-swap":     "innerHTML",
+						"hx-confirm":  "Delete this template? This action cannot be undone.",
+					},
+				}) {
+					@icons.Trash(icons.WithSize(16))
+					Delete
+				}
+			</div>
+		</div>
+
+		<!-- Error Banner -->
+		@errorBanner(data.Error)
+
+		<!-- Template Information -->
+		@card.Card() {
+			@card.Header() {
+				@card.Title() {
+					Template Information
+				}
+			}
+			@card.Content() {
+				<div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
+					@fieldRow("ID", data.Template.ID.String())
+					@fieldRow("Slug", data.Template.Slug)
+					<div>
+						<dt class="text-sm font-medium text-muted-foreground">Channel</dt>
+						<dd class="mt-1">
+							@components.ChannelBadge(data.Template.Channel)
+						</dd>
+					</div>
+					<div>
+						<dt class="text-sm font-medium text-muted-foreground">Category</dt>
+						<dd class="mt-1">
+							if data.Template.Category != "" {
+								@components.CategoryBadge(data.Template.Category)
+							} else {
+								<span class="text-sm text-muted-foreground">—</span>
+							}
+						</dd>
+					</div>
+					<div>
+						<dt class="text-sm font-medium text-muted-foreground">Status</dt>
+						<dd class="mt-1">
+							@components.EnabledBadge(data.Template.Enabled)
+						</dd>
+					</div>
+					@fieldRow("Created", formatDateTime(data.Template.CreatedAt))
+					@fieldRow("Updated", formatDateTime(data.Template.UpdatedAt))
+				</div>
+			}
+		}
+
+		<!-- Variables -->
+		if len(data.Template.Variables) > 0 {
+			@card.Card() {
+				@card.Header() {
+					@card.Title() {
+						Variables
+					}
+					@card.Description() {
+						Template variables available for interpolation.
+					}
+				}
+				@card.Content() {
+					<div class="flex flex-wrap gap-2">
+						for _, v := range data.Template.Variables {
+							@badge.Badge(badge.Props{Variant: badge.VariantOutline}) {
+								{ v.Name }
+							}
+						}
+					</div>
+				}
+			}
+		}
+
+		<!-- Versions -->
+		@card.Card() {
+			@card.Header() {
+				<div class="flex items-center justify-between w-full">
+					<div>
+						@card.Title() {
+							Versions
+						}
+						@card.Description() {
+							Template content versions by locale.
+						}
+					</div>
+					@button.Button(button.Props{
+						Size: button.SizeSm,
+						Attributes: templ.Attributes{
+							"hx-get":      "./versions/create?template_id=" + data.Template.ID.String(),
+							"hx-target":   "#content",
+							"hx-push-url": "true",
+							"hx-swap":     "innerHTML",
+						},
+					}) {
+						@icons.Plus(icons.WithSize(16))
+						Add Version
+					}
+				</div>
+			}
+			@card.Content() {
+				if len(data.Versions) == 0 {
+					<p class="text-sm text-muted-foreground py-4 text-center">No versions yet. Add a version to define notification content.</p>
+				} else {
+					@table.Table() {
+						@table.Header() {
+							@table.Row() {
+								@table.Head() {
+									Locale
+								}
+								@table.Head() {
+									Subject
+								}
+								@table.Head() {
+									Active
+								}
+								@table.Head() {
+									Updated
+								}
+							}
+						}
+						@table.Body() {
+							for _, v := range data.Versions {
+								@table.Row() {
+									@table.Cell() {
+										@badge.Badge(badge.Props{Variant: badge.VariantOutline}) {
+											{ v.Locale }
+										}
+									}
+									@table.Cell() {
+										{ v.Subject }
+									}
+									@table.Cell() {
+										if v.Active {
+											@badge.Badge(badge.Props{Variant: badge.VariantDefault}) {
+												Active
+											}
+										} else {
+											@badge.Badge(badge.Props{Variant: badge.VariantSecondary}) {
+												Inactive
+											}
+										}
+									}
+									@table.Cell() {
+										{ formatDate(v.UpdatedAt) }
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	</div>
+	}
+}

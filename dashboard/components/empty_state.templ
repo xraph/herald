@@ -1,0 +1,23 @@
+package components
+
+import (
+	"github.com/xraph/forgeui/components/card"
+	"github.com/xraph/forgeui/icons"
+)
+
+// EmptyState renders a placeholder for when no data is available.
+templ EmptyState(iconName string, title string, description string) {
+	@card.Card() {
+		@card.Content(card.ContentProps{Class: "flex flex-col items-center justify-center py-12 text-center"}) {
+			if iconName != "" {
+				<span class="text-muted-foreground/40 mb-4">
+					@resolveIcon(iconName, icons.WithSize(48))
+				</span>
+			}
+			<p class="text-lg font-medium text-muted-foreground">{ title }</p>
+			if description != "" {
+				<p class="text-sm text-muted-foreground mt-1">{ description }</p>
+			}
+		}
+	}
+}

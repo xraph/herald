@@ -1,0 +1,145 @@
+package pages
+
+import (
+	"strconv"
+
+	"github.com/xraph/herald/dashboard/components"
+	"github.com/xraph/herald/template"
+	"github.com/xraph/forgeui/components/badge"
+	"github.com/xraph/forgeui/components/button"
+	"github.com/xraph/forgeui/components/card"
+	"github.com/xraph/forgeui/icons"
+)
+
+// TemplatesPageData holds data for the templates list page.
+type TemplatesPageData struct {
+	Templates      []*template.Template
+	ChannelFilter  string
+	CategoryFilter string
+}
+
+templ TemplatesPage(data TemplatesPageData) {
+	<div class="space-y-6">
+		<!-- Header -->
+		<div class="flex items-center justify-between">
+			<div>
+				<h1 class="text-3xl font-bold tracking-tight">Templates</h1>
+				<p class="text-muted-foreground mt-1">Manage notification templates and versions.</p>
+			</div>
+			<div class="flex items-center gap-2">
+				@badge.Badge(badge.Props{Variant: badge.VariantSecondary}) {
+					{ strconv.Itoa(len(data.Templates)) } templates
+				}
+				@button.Button(button.Props{
+					Size: button.SizeSm,
+					Attributes: templ.Attributes{
+						"hx-get":      "./templates/create",
+						"hx-target":   "#content",
+						"hx-push-url": "true",
+						"hx-swap":     "innerHTML",
+					},
+				}) {
+					@icons.Plus(icons.WithSize(16))
+					Create Template
+				}
+			</div>
+		</div>
+
+		<!-- Channel Filters -->
+		<div class="flex flex-wrap gap-2">
+			@templateFilterButton("All", "", data.ChannelFilter, data.CategoryFilter)
+			@templateFilterButton("Email", "email", data.ChannelFilter, data.CategoryFilter)
+			@templateFilterButton("SMS", "sms", data.ChannelFilter, data.CategoryFilter)
+			@templateFilterButton("Push", "push", data.ChannelFilter, data.CategoryFilter)
+			@templateFilterButton("In-App", "inapp", data.ChannelFilter, data.CategoryFilter)
+		</div>
+
+		<!-- Category Filters -->
+		<div class="flex flex-wrap gap-2">
+			@categoryFilterButton("All Categories", "", data.ChannelFilter, data.CategoryFilter)
+			@categoryFilterButton("Auth", "auth", data.ChannelFilter, data.CategoryFilter)
+			@categoryFilterButton("Transactional", "transactional", data.ChannelFilter, data.CategoryFilter)
+			@categoryFilterButton("Marketing", "marketing", data.ChannelFilter, data.CategoryFilter)
+			@categoryFilterButton("System", "system", data.ChannelFilter, data.CategoryFilter)
+		</div>
+
+		<!-- Table -->
+		@card.Card(card.Props{Class: "rounded-sm"}) {
+			@card.Content() {
+				if len(data.Templates) == 0 {
+					@components.EmptyState("file-text", "No templates found", "Create a template to define notification content.")
+				} else {
+					@components.TemplateTable(data.Templates, "./")
+				}
+			}
+		}
+	</div>
+}
+
+templ templateFilterButton(label string, channel string, currentChannel string, currentCategory string) {
+	{{ url := ".?channel=" + channel }}
+	if currentCategory != "" {
+		{{ url = url + "&category=" + currentCategory }}
+	}
+	if channel == currentChannel {
+		@button.Button(button.Props{
+			Variant: button.VariantDefault,
+			Size:    button.SizeSm,
+			Attributes: templ.Attributes{
+				"hx-get":      ".?channel=&category=" + currentCategory,
+				"hx-target":   "closest div.space-y-6",
+				"hx-swap":     "outerHTML",
+				"hx-push-url": "true",
+			},
+		}) {
+			{ label }
+		}
+	} else {
+		@button.Button(button.Props{
+			Variant: button.VariantOutline,
+			Size:    button.SizeSm,
+			Attributes: templ.Attributes{
+				"hx-get":      url,
+				"hx-target":   "closest div.space-y-6",
+				"hx-swap":     "outerHTML",
+				"hx-push-url": "true",
+			},
+		}) {
+			{ label }
+		}
+	}
+}
+
+templ categoryFilterButton(label string, category string, currentChannel string, currentCategory string) {
+	{{ url := ".?category=" + category }}
+	if currentChannel != "" {
+		{{ url = url + "&channel=" + currentChannel }}
+	}
+	if category == currentCategory {
+		@button.Button(button.Props{
+			Variant: button.VariantDefault,
+			Size:    button.SizeSm,
+			Attributes: templ.Attributes{
+				"hx-get":      ".?category=&channel=" + currentChannel,
+				"hx-target":   "closest div.space-y-6",
+				"hx-swap":     "outerHTML",
+				"hx-push-url": "true",
+			},
+		}) {
+			{ label }
+		}
+	} else {
+		@button.Button(button.Props{
+			Variant: button.VariantOutline,
+			Size:    button.SizeSm,
+			Attributes: templ.Attributes{
+				"hx-get":      url,
+				"hx-target":   "closest div.space-y-6",
+				"hx-swap":     "outerHTML",
+				"hx-push-url": "true",
+			},
+		}) {
+			{ label }
+		}
+	}
+}

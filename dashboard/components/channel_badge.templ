@@ -1,0 +1,39 @@
+package components
+
+import (
+	"github.com/xraph/forgeui/components/badge"
+)
+
+// ChannelBadge renders a channel-specific badge with appropriate styling.
+templ ChannelBadge(channel string) {
+	switch channel {
+		case "email":
+			@badge.Badge(badge.Props{Variant: badge.VariantDefault}) {
+				Email
+			}
+		case "sms":
+			@badge.Badge(badge.Props{Variant: badge.VariantSecondary}) {
+				SMS
+			}
+		case "push":
+			@badge.Badge(badge.Props{Variant: badge.VariantOutline}) {
+				Push
+			}
+		case "inapp":
+			@badge.Badge(badge.Props{Variant: badge.VariantSecondary}) {
+				In-App
+			}
+		case "webhook":
+			@badge.Badge(badge.Props{Variant: badge.VariantOutline}) {
+				Webhook
+			}
+		case "chat":
+			@badge.Badge(badge.Props{Variant: badge.VariantOutline}) {
+				Chat
+			}
+		default:
+			@badge.Badge(badge.Props{Variant: badge.VariantOutline}) {
+				{ channel }
+			}
+	}
+}
