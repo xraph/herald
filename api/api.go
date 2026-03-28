@@ -255,7 +255,7 @@ type UnreadCountResponse struct {
 // ─── Route Registration ──────────────────────────────
 
 func (a *ForgeAPI) registerProviderRoutes(router forge.Router) {
-	g := router.Group("/providers", forge.WithGroupTags("providers"))
+	g := router.Group("/v1/providers", forge.WithGroupTags("providers"))
 
 	if err := g.POST("", a.createProvider,
 		forge.WithSummary("Create provider"),
@@ -312,7 +312,7 @@ func (a *ForgeAPI) registerProviderRoutes(router forge.Router) {
 }
 
 func (a *ForgeAPI) registerTemplateRoutes(router forge.Router) {
-	g := router.Group("/templates", forge.WithGroupTags("templates"))
+	g := router.Group("/v1/templates", forge.WithGroupTags("templates"))
 
 	if err := g.POST("", a.createTemplate,
 		forge.WithSummary("Create template"),
@@ -411,7 +411,7 @@ func (a *ForgeAPI) registerTemplateRoutes(router forge.Router) {
 }
 
 func (a *ForgeAPI) registerSendRoutes(router forge.Router) {
-	g := router.Group("", forge.WithGroupTags("send"))
+	g := router.Group("/v1", forge.WithGroupTags("send"))
 
 	if err := g.POST("/send", a.sendNotification,
 		forge.WithSummary("Send notification"),
@@ -437,7 +437,7 @@ func (a *ForgeAPI) registerSendRoutes(router forge.Router) {
 }
 
 func (a *ForgeAPI) registerMessageRoutes(router forge.Router) {
-	g := router.Group("/messages", forge.WithGroupTags("messages"))
+	g := router.Group("/v1/messages", forge.WithGroupTags("messages"))
 
 	if err := g.GET("", a.listMessages,
 		forge.WithSummary("List messages"),
@@ -462,7 +462,7 @@ func (a *ForgeAPI) registerMessageRoutes(router forge.Router) {
 }
 
 func (a *ForgeAPI) registerInboxRoutes(router forge.Router) {
-	g := router.Group("/inbox", forge.WithGroupTags("inbox"))
+	g := router.Group("/v1/inbox", forge.WithGroupTags("inbox"))
 
 	if err := g.GET("", a.listInbox,
 		forge.WithSummary("List inbox"),
@@ -519,7 +519,7 @@ func (a *ForgeAPI) registerInboxRoutes(router forge.Router) {
 }
 
 func (a *ForgeAPI) registerPreferenceRoutes(router forge.Router) {
-	g := router.Group("/preferences", forge.WithGroupTags("preferences"))
+	g := router.Group("/v1/preferences", forge.WithGroupTags("preferences"))
 
 	if err := g.GET("", a.getPreferences,
 		forge.WithSummary("Get preferences"),
@@ -545,7 +545,7 @@ func (a *ForgeAPI) registerPreferenceRoutes(router forge.Router) {
 }
 
 func (a *ForgeAPI) registerConfigRoutes(router forge.Router) {
-	g := router.Group("/config", forge.WithGroupTags("config"))
+	g := router.Group("/v1/config", forge.WithGroupTags("config"))
 
 	if err := g.GET("", a.getConfig,
 		forge.WithSummary("Get config"),
