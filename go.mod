@@ -4,7 +4,7 @@ go 1.25.7
 
 require (
 	github.com/a-h/templ v0.3.1001
-	github.com/xraph/chronicle v1.4.0
+	github.com/xraph/chronicle v1.4.1
 	github.com/xraph/forge v1.4.1
 	github.com/xraph/forgeui v1.4.0
 	github.com/xraph/grove v1.4.1
