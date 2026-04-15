@@ -159,6 +159,11 @@ func (e *Extension) Init(fapp forge.App) error {
 		}
 	}
 
+	// Seed default providers for built-in drivers (e.g. inapp).
+	if err := e.h.SeedDefaultProviders(context.Background(), ""); err != nil {
+		e.Logger().Warn("herald: failed to seed default providers", forge.Error(err))
+	}
+
 	// Set up Forge API.
 	e.api = api.NewForgeAPI(e.h.Store(), e.h, fapp.Logger())
 	if !e.config.DisableRoutes {

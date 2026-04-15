@@ -15,6 +15,7 @@ import (
 	"github.com/xraph/herald/id"
 	"github.com/xraph/herald/inbox"
 	"github.com/xraph/herald/message"
+	"github.com/xraph/herald/provider"
 	"github.com/xraph/herald/template"
 )
 
@@ -330,6 +331,65 @@ func (h *Herald) SeedDefaultTemplates(ctx context.Context, appID string) error {
 				)
 			}
 		}
+	}
+
+	return nil
+}
+
+// SeedDefaultProviders creates default providers for built-in zero-config
+// drivers (e.g. inapp). This ensures channels work out of the box without
+// requiring manual provider setup via the dashboard. Providers that need
+// credentials (email, sms, push) are not seeded.
+func (h *Herald) SeedDefaultProviders(ctx context.Context, appID string) error {
+	// zeroConfigDrivers are drivers that work without credentials.
+	zeroConfigDrivers := map[string]bool{
+		"inapp": true,
+	}
+
+	for _, name := range h.drivers.Names() {
+		if !zeroConfigDrivers[name] {
+			continue
+		}
+
+		drv, err := h.drivers.Get(name)
+		if err != nil {
+			continue
+		}
+
+		channel := drv.Channel()
+
+		existing, _ := h.store.ListProviders(ctx, appID, channel) //nolint:errcheck // skip if lookup fails
+		if len(existing) > 0 {
+			continue // already has a provider for this channel
+		}
+
+		now := time.Now()
+		p := &provider.Provider{
+			ID:        id.NewProviderID(),
+			AppID:     appID,
+			Name:      name + " (default)",
+			Channel:   channel,
+			Driver:    name,
+			Priority:  0,
+			Enabled:   true,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+
+		if err := h.store.CreateProvider(ctx, p); err != nil {
+			h.logger.Warn("herald: failed to seed default provider",
+				"channel", channel,
+				"driver", name,
+				"error", err,
+			)
+			continue
+		}
+
+		h.logger.Info("herald: seeded default provider",
+			"channel", channel,
+			"driver", name,
+			"provider_id", p.ID.String(),
+		)
 	}
 
 	return nil

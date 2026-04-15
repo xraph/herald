@@ -14,7 +14,7 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/gofrs/uuid/v5 v5.3.2 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
-	github.com/xraph/go-utils v1.1.0 // indirect
+	github.com/xraph/go-utils v1.1.1 // indirect
 	go.jetify.com/typeid/v2 v2.0.0-alpha.3 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel v1.40.0 // indirect
