@@ -41,8 +41,8 @@ func toProviderModel(p *provider.Provider) *providerModel {
 		Name:        p.Name,
 		Channel:     p.Channel,
 		Driver:      p.Driver,
-		Credentials: p.Credentials,
-		Settings:    p.Settings,
+		Credentials: jsonbObject(p.Credentials),
+		Settings:    jsonbObject(p.Settings),
 		Priority:    p.Priority,
 		Enabled:     p.Enabled,
 		CreatedAt:   p.CreatedAt,
@@ -209,10 +209,6 @@ type messageModel struct {
 }
 
 func toMessageModel(m *message.Message) *messageModel {
-	md := m.Metadata
-	if md == nil {
-		md = map[string]string{}
-	}
 	return &messageModel{
 		ID:          m.ID.String(),
 		AppID:       m.AppID,
@@ -225,7 +221,7 @@ func toMessageModel(m *message.Message) *messageModel {
 		Body:        m.Body,
 		Status:      string(m.Status),
 		Error:       m.Error,
-		Metadata:    md,
+		Metadata:    jsonbObject(m.Metadata),
 		Async:       m.Async,
 		Attempts:    m.Attempts,
 		SentAt:      m.SentAt,
@@ -282,10 +278,6 @@ type notificationModel struct {
 }
 
 func toNotificationModel(n *inbox.Notification) *notificationModel {
-	md := n.Metadata
-	if md == nil {
-		md = map[string]string{}
-	}
 	return &notificationModel{
 		ID:        n.ID.String(),
 		AppID:     n.AppID,
@@ -298,7 +290,7 @@ func toNotificationModel(n *inbox.Notification) *notificationModel {
 		ImageURL:  n.ImageURL,
 		Read:      n.Read,
 		ReadAt:    n.ReadAt,
-		Metadata:  md,
+		Metadata:  jsonbObject(n.Metadata),
 		ExpiresAt: n.ExpiresAt,
 		CreatedAt: n.CreatedAt,
 	}
