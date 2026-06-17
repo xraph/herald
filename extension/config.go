@@ -26,6 +26,10 @@ type Config struct {
 	// When empty and WithGroveDatabase was called, the default (unnamed) DB is used.
 	GroveDatabase string `json:"grove_database" mapstructure:"grove_database" yaml:"grove_database"`
 
+	// Providers declares notification providers seeded into the store on
+	// startup (seed-if-absent). Credentials may use ${ENV} interpolation.
+	Providers []ProviderConfig `json:"providers" yaml:"providers" mapstructure:"providers"`
+
 	// RequireConfig requires config to be present in YAML files.
 	// If true and no config is found, Register returns an error.
 	RequireConfig bool `json:"-" yaml:"-"`

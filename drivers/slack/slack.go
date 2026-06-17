@@ -110,7 +110,11 @@ func (d *Driver) sendAPI(ctx context.Context, msg *driver.OutboundMessage) (*dri
 
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://slack.com/api/chat.postMessage", bytes.NewReader(body))
+	baseURL := msg.Data["base_url"]
+	if baseURL == "" {
+		baseURL = "https://slack.com"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/api/chat.postMessage", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("slack: create request: %w", err)
 	}

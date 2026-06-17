@@ -395,6 +395,48 @@ func (h *Herald) SeedDefaultProviders(ctx context.Context, appID string) error {
 	return nil
 }
 
+// SeedConfiguredProviders persists providers declared in configuration into
+// the store, seed-if-absent: a provider is created only when no provider of
+// the same name exists for its app. Existing records (including dashboard
+// edits) are left untouched. A missing driver or failed Validate is logged as
+// a warning, never an error.
+func (h *Herald) SeedConfiguredProviders(ctx context.Context, providers []provider.Provider) error {
+	for i := range providers {
+		p := providers[i]
+
+		existing, _ := h.store.ListAllProviders(ctx, p.AppID) //nolint:errcheck // skip lookup failures
+		duplicate := false
+		for _, e := range existing {
+			if e.Name == p.Name {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			h.logger.Info("herald: configured provider already exists, skipping",
+				"name", p.Name, "app_id", p.AppID)
+			continue
+		}
+
+		if drv, err := h.drivers.Get(p.Driver); err != nil {
+			h.logger.Warn("herald: configured provider references unregistered driver",
+				"name", p.Name, "driver", p.Driver)
+		} else if vErr := drv.Validate(p.Credentials, p.Settings); vErr != nil {
+			h.logger.Warn("herald: configured provider failed driver validation",
+				"name", p.Name, "driver", p.Driver, "error", vErr)
+		}
+
+		if err := h.store.CreateProvider(ctx, &p); err != nil {
+			h.logger.Warn("herald: failed to seed configured provider",
+				"name", p.Name, "error", err)
+			continue
+		}
+		h.logger.Info("herald: seeded configured provider",
+			"name", p.Name, "channel", p.Channel, "driver", p.Driver, "provider_id", p.ID.String())
+	}
+	return nil
+}
+
 // ResetDefaultTemplates deletes all system templates for an app and re-seeds
 // the factory defaults. Custom (non-system) templates are preserved.
 func (h *Herald) ResetDefaultTemplates(ctx context.Context, appID string) error {

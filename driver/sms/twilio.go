@@ -46,7 +46,11 @@ func (d *TwilioDriver) Send(ctx context.Context, msg *driver.OutboundMessage) (*
 		fromNumber = msg.From
 	}
 
-	apiURL := fmt.Sprintf("https://api.twilio.com/2010-04-01/Accounts/%s/Messages.json", accountSID)
+	baseURL := msg.Data["base_url"]
+	if baseURL == "" {
+		baseURL = "https://api.twilio.com"
+	}
+	apiURL := fmt.Sprintf("%s/2010-04-01/Accounts/%s/Messages.json", baseURL, accountSID)
 
 	data := url.Values{}
 	data.Set("To", msg.To)

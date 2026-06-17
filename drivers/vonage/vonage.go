@@ -72,7 +72,11 @@ func (d *Driver) Send(ctx context.Context, msg *driver.OutboundMessage) (*driver
 
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://rest.nexmo.com/sms/json", bytes.NewReader(jsonBody))
+	baseURL := msg.Data["base_url"]
+	if baseURL == "" {
+		baseURL = "https://rest.nexmo.com"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/sms/json", bytes.NewReader(jsonBody))
 	if err != nil {
 		return nil, fmt.Errorf("vonage: create request: %w", err)
 	}

@@ -106,7 +106,11 @@ func (d *Driver) Send(ctx context.Context, msg *driver.OutboundMessage) (*driver
 		return nil, fmt.Errorf("ses: marshal request: %w", err)
 	}
 
-	endpoint := fmt.Sprintf("https://email.%s.amazonaws.com/v2/email/outbound-emails", region)
+	baseURL := msg.Data["base_url"]
+	if baseURL == "" {
+		baseURL = fmt.Sprintf("https://email.%s.amazonaws.com", region)
+	}
+	endpoint := baseURL + "/v2/email/outbound-emails"
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(jsonBody))
 	if err != nil {

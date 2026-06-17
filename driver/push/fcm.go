@@ -66,7 +66,11 @@ func (d *FCMDriver) Send(ctx context.Context, msg *driver.OutboundMessage) (*dri
 		return nil, fmt.Errorf("fcm: marshal request: %w", err)
 	}
 
-	apiURL := fmt.Sprintf("https://fcm.googleapis.com/v1/projects/%s/messages:send", projectID)
+	baseURL := msg.Data["base_url"]
+	if baseURL == "" {
+		baseURL = "https://fcm.googleapis.com"
+	}
+	apiURL := fmt.Sprintf("%s/v1/projects/%s/messages:send", baseURL, projectID)
 
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 

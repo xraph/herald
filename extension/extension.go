@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/xraph/chronicle"
 	"github.com/xraph/forge"
@@ -162,6 +163,14 @@ func (e *Extension) Init(fapp forge.App) error {
 	// Seed default providers for built-in drivers (e.g. inapp).
 	if err := e.h.SeedDefaultProviders(context.Background(), ""); err != nil {
 		e.Logger().Warn("herald: failed to seed default providers", forge.Error(err))
+	}
+
+	// Seed providers declared in config.yaml (seed-if-absent).
+	if len(e.config.Providers) > 0 {
+		seeded := providersFromConfig(e.config.Providers, time.Now())
+		if err := e.h.SeedConfiguredProviders(context.Background(), seeded); err != nil {
+			e.Logger().Warn("herald: failed to seed configured providers", forge.Error(err))
+		}
 	}
 
 	// Set up Forge API.

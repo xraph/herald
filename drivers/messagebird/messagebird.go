@@ -63,7 +63,11 @@ func (d *Driver) Send(ctx context.Context, msg *driver.OutboundMessage) (*driver
 
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://rest.messagebird.com/messages", bytes.NewReader(jsonBody))
+	baseURL := msg.Data["base_url"]
+	if baseURL == "" {
+		baseURL = "https://rest.messagebird.com"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/messages", bytes.NewReader(jsonBody))
 	if err != nil {
 		return nil, fmt.Errorf("messagebird: create request: %w", err)
 	}

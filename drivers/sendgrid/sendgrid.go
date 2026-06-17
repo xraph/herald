@@ -79,7 +79,11 @@ func (d *Driver) Send(ctx context.Context, msg *driver.OutboundMessage) (*driver
 
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.sendgrid.com/v3/mail/send", bytes.NewReader(body))
+	baseURL := msg.Data["base_url"]
+	if baseURL == "" {
+		baseURL = "https://api.sendgrid.com"
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/v3/mail/send", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("sendgrid: create request: %w", err)
 	}

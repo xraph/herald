@@ -78,10 +78,7 @@ func (d *Driver) Send(ctx context.Context, msg *driver.OutboundMessage) (*driver
 		return nil, fmt.Errorf("apns: generate token: %w", err)
 	}
 
-	host := "https://api.push.apple.com"
-	if sandbox {
-		host = "https://api.sandbox.push.apple.com"
-	}
+	host := resolveHost(msg.Data["base_url"], sandbox)
 
 	payload := apnsPayload{
 		Aps: apnsAps{
@@ -143,6 +140,18 @@ func (d *Driver) getOrRefreshToken(keyID, teamID string, key *ecdsa.PrivateKey) 
 	d.token = token
 	d.tokenExp = time.Now().Add(50 * time.Minute)
 	return token, nil
+}
+
+// resolveHost returns the APNs base host. An explicit base_url overrides the
+// default; otherwise the sandbox or production host is chosen.
+func resolveHost(baseURL string, sandbox bool) string {
+	if baseURL != "" {
+		return baseURL
+	}
+	if sandbox {
+		return "https://api.sandbox.push.apple.com"
+	}
+	return "https://api.push.apple.com"
 }
 
 func parseECPrivateKey(pemStr string) (*ecdsa.PrivateKey, error) {
