@@ -57,9 +57,7 @@ func (d *FCMDriver) Send(ctx context.Context, msg *driver.OutboundMessage) (*dri
 		Title: msg.Title,
 		Body:  msg.Text,
 	}
-	if len(msg.Data) > 0 {
-		fcmMsg.Message.Data = msg.Data
-	}
+	fcmMsg.Message.Data = filterData(msg.Data)
 
 	jsonBody, err := json.Marshal(fcmMsg)
 	if err != nil {
@@ -104,4 +102,26 @@ func (d *FCMDriver) Send(ctx context.Context, msg *driver.OutboundMessage) (*dri
 		ProviderMessageID: result.Name,
 		Status:            message.StatusSent,
 	}, nil
+}
+
+// filterData returns a copy of data excluding internal credential and
+// transport keys, so they are never forwarded to FCM as message.data fields
+// (which would leak them into the payload delivered to devices).
+func filterData(data map[string]string) map[string]string {
+	exclude := map[string]bool{
+		"project_id":   true,
+		"access_token": true,
+		"server_key":   true,
+		"base_url":     true,
+	}
+	filtered := make(map[string]string)
+	for k, v := range data {
+		if !exclude[k] {
+			filtered[k] = v
+		}
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	return filtered
 }
