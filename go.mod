@@ -5,12 +5,12 @@ go 1.25.7
 require (
 	github.com/a-h/templ v0.3.1001
 	github.com/xraph/chronicle v1.5.0
-	github.com/xraph/forge v1.7.2
+	github.com/xraph/forge v1.8.0
 	github.com/xraph/forgeui v1.4.1
-	github.com/xraph/grove v1.5.6
-	github.com/xraph/grove/drivers/mongodriver v1.5.6
-	github.com/xraph/grove/drivers/pgdriver v1.5.6
-	github.com/xraph/grove/drivers/sqlitedriver v1.5.6
+	github.com/xraph/grove v1.5.7
+	github.com/xraph/grove/drivers/mongodriver v1.5.7
+	github.com/xraph/grove/drivers/pgdriver v1.5.7
+	github.com/xraph/grove/drivers/sqlitedriver v1.5.7
 	github.com/xraph/vessel v1.0.2
 	go.jetify.com/typeid/v2 v2.0.0-alpha.3
 	go.mongodb.org/mongo-driver/v2 v2.5.0
@@ -70,6 +70,10 @@ require (
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
+	github.com/prometheus/client_golang v1.19.1 // indirect
+	github.com/prometheus/client_model v0.5.0 // indirect
+	github.com/prometheus/common v0.48.0 // indirect
+	github.com/prometheus/procfs v0.12.0 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.59.0 // indirect
 	github.com/quic-go/webtransport-go v0.10.0 // indirect
