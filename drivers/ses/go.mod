@@ -2,7 +2,7 @@ module github.com/xraph/herald/drivers/ses
 
 go 1.26.0
 
-require github.com/xraph/herald v0.0.0
+require github.com/xraph/herald v1.6.1
 
 require (
 	github.com/gofrs/uuid/v5 v5.3.2 // indirect

@@ -3,7 +3,7 @@ module github.com/xraph/herald/drivers/webhook
 go 1.26.0
 
 require (
-	github.com/xraph/herald v0.0.0
+	github.com/xraph/herald v1.6.1
 	github.com/xraph/relay v0.0.0
 )
 
