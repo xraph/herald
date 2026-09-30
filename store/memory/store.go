@@ -3,6 +3,7 @@ package memory
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"time"
 
@@ -52,7 +53,7 @@ func (s *Store) Close() error                    { return nil }
 func (s *Store) CreateProvider(_ context.Context, p *provider.Provider) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.providers[p.ID.String()] = p
+	s.providers[p.ID.String()] = cloneProvider(p)
 	return nil
 }
 
@@ -63,7 +64,7 @@ func (s *Store) GetProvider(_ context.Context, providerID id.ProviderID) (*provi
 	if !ok {
 		return nil, store.ErrProviderNotFound
 	}
-	return p, nil
+	return cloneProvider(p), nil
 }
 
 func (s *Store) UpdateProvider(_ context.Context, p *provider.Provider) error {
@@ -72,7 +73,7 @@ func (s *Store) UpdateProvider(_ context.Context, p *provider.Provider) error {
 	if _, ok := s.providers[p.ID.String()]; !ok {
 		return store.ErrProviderNotFound
 	}
-	s.providers[p.ID.String()] = p
+	s.providers[p.ID.String()] = cloneProvider(p)
 	return nil
 }
 
@@ -92,9 +93,18 @@ func (s *Store) ListProviders(_ context.Context, appID string, channel string) (
 	var result []*provider.Provider
 	for _, p := range s.providers {
 		if p.AppID == appID && (channel == "" || p.Channel == channel) {
-			result = append(result, p)
+			result = append(result, cloneProvider(p))
 		}
 	}
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].Priority != result[j].Priority {
+			return result[i].Priority < result[j].Priority
+		}
+		if !result[i].CreatedAt.Equal(result[j].CreatedAt) {
+			return result[i].CreatedAt.Before(result[j].CreatedAt)
+		}
+		return result[i].ID.String() < result[j].ID.String()
+	})
 	return result, nil
 }
 
@@ -110,7 +120,7 @@ func (s *Store) CreateTemplate(_ context.Context, t *template.Template) error {
 	if s.slugTaken(t) {
 		return store.ErrDuplicateSlug
 	}
-	s.templates[t.ID.String()] = t
+	s.templates[t.ID.String()] = cloneTemplate(t)
 	return nil
 }
 
@@ -121,9 +131,7 @@ func (s *Store) GetTemplate(_ context.Context, templateID id.TemplateID) (*templ
 	if !ok {
 		return nil, store.ErrTemplateNotFound
 	}
-	// Attach versions
-	t.Versions = s.versionsForTemplate(templateID)
-	return t, nil
+	return s.withVersions(t), nil
 }
 
 func (s *Store) GetTemplateBySlug(_ context.Context, appID, slug, channel string) (*template.Template, error) {
@@ -131,8 +139,7 @@ func (s *Store) GetTemplateBySlug(_ context.Context, appID, slug, channel string
 	defer s.mu.RUnlock()
 	for _, t := range s.templates {
 		if t.AppID == appID && t.Slug == slug && t.Channel == channel {
-			t.Versions = s.versionsForTemplate(t.ID)
-			return t, nil
+			return s.withVersions(t), nil
 		}
 	}
 	return nil, store.ErrTemplateNotFound
@@ -147,7 +154,7 @@ func (s *Store) UpdateTemplate(_ context.Context, t *template.Template) error {
 	if s.slugTaken(t) {
 		return store.ErrDuplicateSlug
 	}
-	s.templates[t.ID.String()] = t
+	s.templates[t.ID.String()] = cloneTemplate(t)
 	return nil
 }
 
@@ -178,39 +185,52 @@ func (s *Store) slugTaken(t *template.Template) bool {
 }
 
 func (s *Store) ListTemplates(_ context.Context, appID string) ([]*template.Template, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	var result []*template.Template
-	for _, t := range s.templates {
-		if t.AppID == appID {
-			t.Versions = s.versionsForTemplate(t.ID)
-			result = append(result, t)
-		}
-	}
-	return result, nil
+	return s.listTemplates(func(t *template.Template) bool { return t.AppID == appID }), nil
 }
 
 func (s *Store) ListTemplatesByChannel(_ context.Context, appID, channel string) ([]*template.Template, error) {
+	return s.listTemplates(func(t *template.Template) bool { return t.AppID == appID && t.Channel == channel }), nil
+}
+
+func (s *Store) listTemplates(keep func(*template.Template) bool) []*template.Template {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var result []*template.Template
 	for _, t := range s.templates {
-		if t.AppID == appID && t.Channel == channel {
-			t.Versions = s.versionsForTemplate(t.ID)
-			result = append(result, t)
+		if keep(t) {
+			result = append(result, s.withVersions(t))
 		}
 	}
-	return result, nil
+	sort.SliceStable(result, func(i, j int) bool {
+		if !result[i].CreatedAt.Equal(result[j].CreatedAt) {
+			return result[i].CreatedAt.Before(result[j].CreatedAt)
+		}
+		return result[i].ID.String() < result[j].ID.String()
+	})
+	return result
 }
 
-func (s *Store) versionsForTemplate(templateID id.TemplateID) []template.Version {
-	var versions []template.Version
+// withVersions returns a copy of t carrying its versions, in locale order.
+// The caller must hold s.mu.
+func (s *Store) withVersions(t *template.Template) *template.Template {
+	c := cloneTemplate(t)
+	for _, v := range s.sortedVersions(t.ID) {
+		c.Versions = append(c.Versions, *v)
+	}
+	return c
+}
+
+// sortedVersions returns copies of a template's versions, locale ascending.
+// The caller must hold s.mu.
+func (s *Store) sortedVersions(templateID id.TemplateID) []*template.Version {
+	var result []*template.Version
 	for _, v := range s.versions {
-		if v.TemplateID == templateID {
-			versions = append(versions, *v)
+		if v.TemplateID.String() == templateID.String() {
+			result = append(result, cloneVersion(v))
 		}
 	}
-	return versions
+	sort.SliceStable(result, func(i, j int) bool { return result[i].Locale < result[j].Locale })
+	return result
 }
 
 // ─── Version Store ──────────────────────────────
@@ -221,7 +241,7 @@ func (s *Store) CreateVersion(_ context.Context, v *template.Version) error {
 	if s.localeTaken(v) {
 		return store.ErrDuplicateLocale
 	}
-	s.versions[v.ID.String()] = v
+	s.versions[v.ID.String()] = cloneVersion(v)
 	return nil
 }
 
@@ -232,7 +252,7 @@ func (s *Store) GetVersion(_ context.Context, versionID id.TemplateVersionID) (*
 	if !ok {
 		return nil, store.ErrVersionNotFound
 	}
-	return v, nil
+	return cloneVersion(v), nil
 }
 
 func (s *Store) UpdateVersion(_ context.Context, v *template.Version) error {
@@ -244,7 +264,7 @@ func (s *Store) UpdateVersion(_ context.Context, v *template.Version) error {
 	if s.localeTaken(v) {
 		return store.ErrDuplicateLocale
 	}
-	s.versions[v.ID.String()] = v
+	s.versions[v.ID.String()] = cloneVersion(v)
 	return nil
 }
 
@@ -272,13 +292,7 @@ func (s *Store) localeTaken(v *template.Version) bool {
 func (s *Store) ListVersions(_ context.Context, templateID id.TemplateID) ([]*template.Version, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	var result []*template.Version
-	for _, v := range s.versions {
-		if v.TemplateID == templateID {
-			result = append(result, v)
-		}
-	}
-	return result, nil
+	return s.sortedVersions(templateID), nil
 }
 
 // ─── Message Store ──────────────────────────────
@@ -286,7 +300,7 @@ func (s *Store) ListVersions(_ context.Context, templateID id.TemplateID) ([]*te
 func (s *Store) CreateMessage(_ context.Context, m *message.Message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.messages[m.ID.String()] = m
+	s.messages[m.ID.String()] = cloneMessage(m)
 	return nil
 }
 
@@ -297,7 +311,7 @@ func (s *Store) GetMessage(_ context.Context, messageID id.MessageID) (*message.
 	if !ok {
 		return nil, store.ErrMessageNotFound
 	}
-	return m, nil
+	return cloneMessage(m), nil
 }
 
 func (s *Store) UpdateMessageStatus(_ context.Context, messageID id.MessageID, status message.Status, errMsg string) error {
@@ -321,27 +335,18 @@ func (s *Store) ListMessages(_ context.Context, appID string, opts message.ListO
 	defer s.mu.RUnlock()
 	var result []*message.Message
 	for _, m := range s.messages {
-		if m.AppID != appID {
+		if m.AppID != appID || (opts.Channel != "" && m.Channel != opts.Channel) || (opts.Status != "" && m.Status != opts.Status) {
 			continue
 		}
-		if opts.Channel != "" && m.Channel != opts.Channel {
-			continue
+		result = append(result, cloneMessage(m))
+	}
+	sort.SliceStable(result, func(i, j int) bool {
+		if !result[i].CreatedAt.Equal(result[j].CreatedAt) {
+			return result[i].CreatedAt.After(result[j].CreatedAt)
 		}
-		if opts.Status != "" && m.Status != opts.Status {
-			continue
-		}
-		result = append(result, m)
-	}
-	// Apply offset/limit
-	if opts.Offset > 0 && opts.Offset < len(result) {
-		result = result[opts.Offset:]
-	} else if opts.Offset >= len(result) {
-		return nil, nil
-	}
-	if opts.Limit > 0 && opts.Limit < len(result) {
-		result = result[:opts.Limit]
-	}
-	return result, nil
+		return result[i].ID.String() > result[j].ID.String()
+	})
+	return page(result, opts.Limit, opts.Offset), nil
 }
 
 // ─── Inbox Store ──────────────────────────────
@@ -349,7 +354,7 @@ func (s *Store) ListMessages(_ context.Context, appID string, opts message.ListO
 func (s *Store) CreateNotification(_ context.Context, n *inbox.Notification) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.notifications[n.ID.String()] = n
+	s.notifications[n.ID.String()] = cloneNotification(n)
 	return nil
 }
 
@@ -360,7 +365,7 @@ func (s *Store) GetNotification(_ context.Context, notifID id.InboxID) (*inbox.N
 	if !ok {
 		return nil, store.ErrNotificationNotFound
 	}
-	return n, nil
+	return cloneNotification(n), nil
 }
 
 func (s *Store) DeleteNotification(_ context.Context, notifID id.InboxID) error {
@@ -417,18 +422,16 @@ func (s *Store) ListNotifications(_ context.Context, appID, userID string, limit
 	var result []*inbox.Notification
 	for _, n := range s.notifications {
 		if n.AppID == appID && n.UserID == userID {
-			result = append(result, n)
+			result = append(result, cloneNotification(n))
 		}
 	}
-	if offset > 0 && offset < len(result) {
-		result = result[offset:]
-	} else if offset >= len(result) {
-		return nil, nil
-	}
-	if limit > 0 && limit < len(result) {
-		result = result[:limit]
-	}
-	return result, nil
+	sort.SliceStable(result, func(i, j int) bool {
+		if !result[i].CreatedAt.Equal(result[j].CreatedAt) {
+			return result[i].CreatedAt.After(result[j].CreatedAt)
+		}
+		return result[i].ID.String() > result[j].ID.String()
+	})
+	return page(result, limit, offset), nil
 }
 
 // ─── Preference Store ──────────────────────────────
@@ -440,13 +443,13 @@ func (s *Store) GetPreference(_ context.Context, appID, userID string) (*prefere
 	if !ok {
 		return nil, store.ErrPreferenceNotFound
 	}
-	return p, nil
+	return clonePreference(p), nil
 }
 
 func (s *Store) SetPreference(_ context.Context, p *preference.Preference) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.preferences[p.AppID+":"+p.UserID] = p
+	s.preferences[p.AppID+":"+p.UserID] = clonePreference(p)
 	return nil
 }
 
@@ -467,14 +470,14 @@ func (s *Store) GetScopedConfig(_ context.Context, appID string, scopeType scope
 	if !ok {
 		return nil, store.ErrScopedConfigNotFound
 	}
-	return cfg, nil
+	return cloneScopedConfig(cfg), nil
 }
 
 func (s *Store) SetScopedConfig(_ context.Context, cfg *scope.Config) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := cfg.AppID + ":" + string(cfg.Scope) + ":" + cfg.ScopeID
-	s.scopedConfigs[key] = cfg
+	s.scopedConfigs[key] = cloneScopedConfig(cfg)
 	return nil
 }
 
@@ -496,8 +499,14 @@ func (s *Store) ListScopedConfigs(_ context.Context, appID string) ([]*scope.Con
 	var result []*scope.Config
 	for _, cfg := range s.scopedConfigs {
 		if cfg.AppID == appID {
-			result = append(result, cfg)
+			result = append(result, cloneScopedConfig(cfg))
 		}
 	}
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].Scope != result[j].Scope {
+			return result[i].Scope < result[j].Scope
+		}
+		return result[i].CreatedAt.Before(result[j].CreatedAt)
+	})
 	return result, nil
 }

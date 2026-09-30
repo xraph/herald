@@ -68,7 +68,6 @@ func newVersion(templateID id.TemplateID, locale string) *template.Version {
 	}
 }
 
-//nolint:unused // used by the suite files later tasks add
 func newMessage(appID, channel string, status message.Status, created time.Time) *message.Message {
 	return &message.Message{
 		ID:         id.NewMessageID(),
@@ -87,7 +86,6 @@ func newMessage(appID, channel string, status message.Status, created time.Time)
 	}
 }
 
-//nolint:unused // used by the suite files later tasks add
 func newNotification(appID, userID string, created time.Time) *inbox.Notification {
 	return &inbox.Notification{
 		ID:        id.NewInboxID(),

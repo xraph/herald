@@ -22,4 +22,9 @@ func Run(t *testing.T, open Opener) {
 	t.Helper()
 	t.Run("NotFound", func(t *testing.T) { testNotFound(t, open(t)) })
 	t.Run("Duplicates", func(t *testing.T) { testDuplicates(t, open(t)) })
+	t.Run("RoundTrips", func(t *testing.T) { testRoundTrips(t, open(t)) })
+	t.Run("ReadsAreCopies", func(t *testing.T) { testReadsAreCopies(t, open(t)) })
+	t.Run("EmptyAppIsExact", func(t *testing.T) { testEmptyAppIsExact(t, open(t)) })
+	t.Run("Ordering", func(t *testing.T) { testOrdering(t, open(t)) })
+	t.Run("MessagePaging", func(t *testing.T) { testMessagePaging(t, open(t)) })
 }
