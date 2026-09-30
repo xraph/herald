@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/xraph/herald/store"
+	"github.com/xraph/herald/template"
 )
 
 // Sentinel errors returned by Herald operations.
@@ -33,13 +34,13 @@ var (
 	ErrTemplateDisabled = errors.New("herald: template is disabled")
 
 	// ErrNoVersionForLocale is returned when no template version matches the requested locale.
-	ErrNoVersionForLocale = errors.New("herald: no template version for locale")
+	ErrNoVersionForLocale = template.ErrNoVersionForLocale
 
 	// ErrTemplateRenderFailed is returned when template rendering fails.
-	ErrTemplateRenderFailed = errors.New("herald: template rendering failed")
+	ErrTemplateRenderFailed = template.ErrTemplateRenderFailed
 
 	// ErrMissingRequiredVariable is returned when a required template variable is not provided.
-	ErrMissingRequiredVariable = errors.New("herald: missing required template variable")
+	ErrMissingRequiredVariable = template.ErrMissingRequiredVariable
 
 	// ErrMessageNotFound is returned when a message cannot be found.
 	ErrMessageNotFound = store.ErrMessageNotFound

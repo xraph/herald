@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	htmltpl "html/template"
+	"maps"
+	"sort"
 	"strings"
 	texttpl "text/template"
 	"time"
@@ -37,83 +39,47 @@ func NewRenderer() *Renderer {
 	}
 }
 
-// Render renders a template for the given locale with the provided data.
-// It finds the best matching version (exact locale match, then default "").
+// Render renders the version that answers locale (see Resolve) with data,
+// after filling declared defaults. It stops at the first field that fails,
+// which is what Send wants; Preview is the forgiving variant.
 func (r *Renderer) Render(tmpl *Template, locale string, data map[string]any) (*RenderedContent, error) {
-	version := r.findVersion(tmpl, locale)
-	if version == nil {
+	version, match := Resolve(tmpl, locale)
+	if match == MatchNone {
 		return nil, fmt.Errorf("%w: template=%q locale=%q", ErrNoVersionForLocale, tmpl.Slug, locale)
 	}
+	return r.RenderVersion(version, tmpl.Variables, data)
+}
 
-	if err := r.validateVariables(tmpl.Variables, data); err != nil {
+// RenderVersion renders one version, active or not.
+func (r *Renderer) RenderVersion(version *Version, vars []Variable, data map[string]any) (*RenderedContent, error) {
+	data = withDefaults(vars, data)
+	if err := r.validateVariables(vars, data); err != nil {
 		return nil, err
 	}
 
 	var result RenderedContent
 	var err error
-
 	if version.Subject != "" {
-		result.Subject, err = r.renderText(version.Subject, data)
-		if err != nil {
+		if result.Subject, err = r.renderText(version.Subject, data); err != nil {
 			return nil, fmt.Errorf("%w: subject: %w", ErrTemplateRenderFailed, err)
 		}
 	}
-
 	if version.HTML != "" {
-		result.HTML, err = r.renderHTML(version.HTML, data)
-		if err != nil {
+		if result.HTML, err = r.renderHTML(version.HTML, data); err != nil {
 			return nil, fmt.Errorf("%w: html: %w", ErrTemplateRenderFailed, err)
 		}
 	}
-
 	if version.Text != "" {
-		result.Text, err = r.renderText(version.Text, data)
-		if err != nil {
+		if result.Text, err = r.renderText(version.Text, data); err != nil {
 			return nil, fmt.Errorf("%w: text: %w", ErrTemplateRenderFailed, err)
 		}
 	}
-
 	if version.Title != "" {
-		result.Title, err = r.renderText(version.Title, data)
-		if err != nil {
+		if result.Title, err = r.renderText(version.Title, data); err != nil {
 			return nil, fmt.Errorf("%w: title: %w", ErrTemplateRenderFailed, err)
 		}
 	}
-
 	return &result, nil
-}
-
-// findVersion returns the version matching the locale, or the default ("") locale.
-func (r *Renderer) findVersion(tmpl *Template, locale string) *Version {
-	var defaultVersion *Version
-
-	for i := range tmpl.Versions {
-		v := &tmpl.Versions[i]
-		if !v.Active {
-			continue
-		}
-
-		if v.Locale == locale {
-			return v
-		}
-
-		if v.Locale == "" {
-			defaultVersion = v
-		}
-	}
-
-	// If exact locale not found, try language-only match (e.g., "en" from "en-US")
-	if locale != "" && strings.Contains(locale, "-") {
-		lang := strings.SplitN(locale, "-", 2)[0]
-		for i := range tmpl.Versions {
-			v := &tmpl.Versions[i]
-			if v.Active && v.Locale == lang {
-				return v
-			}
-		}
-	}
-
-	return defaultVersion
 }
 
 // validateVariables checks that all required variables are present in data.
@@ -189,4 +155,31 @@ func defaultFuncMap() texttpl.FuncMap {
 			return t.Format(layout)
 		},
 	}
+}
+
+// FuncNames lists the helper functions templates can call, sorted.
+func (r *Renderer) FuncNames() []string {
+	names := make([]string, 0, len(r.funcMap))
+	for name := range r.funcMap {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// withDefaults returns a copy of data with every declared variable that data
+// lacks filled from its Default. The caller's map is never changed, and a
+// value the caller supplied always wins.
+func withDefaults(vars []Variable, data map[string]any) map[string]any {
+	out := make(map[string]any, len(data)+len(vars))
+	maps.Copy(out, data)
+	for _, v := range vars {
+		if v.Default == "" {
+			continue
+		}
+		if _, ok := out[v.Name]; !ok {
+			out[v.Name] = v.Default
+		}
+	}
+	return out
 }
