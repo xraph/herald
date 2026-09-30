@@ -50,7 +50,7 @@ func newHerald(t *testing.T, st store.Store, opts ...Option) *Herald {
 	return h
 }
 
-func seedProvider(t *testing.T, h *Herald, appID, name, driverName string, priority int, enabled bool) *provider.Provider { //nolint:unparam // Task 12 seeds providers with other drivers
+func seedProvider(t *testing.T, h *Herald, appID, name, driverName string, priority int, enabled bool) *provider.Provider { //nolint:unparam // driverName is a parameter for readability; every current caller uses the "rec" driver
 	t.Helper()
 	p := &provider.Provider{
 		ID: id.NewProviderID(), AppID: appID, Name: name, Channel: "email", Driver: driverName,

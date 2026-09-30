@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"time"
 	"unicode/utf8"
 
@@ -298,11 +299,16 @@ func (h *Herald) resolveForSend(ctx context.Context, req *SendRequest) (*scope.R
 	return &scope.ResolveResult{Provider: p, Config: cfg, Via: scope.ViaChosen}, nil
 }
 
-// driverData is the map a driver reads: credentials, then settings, with
-// settings winning a key collision, which is how Send has always merged them.
-func (h *Herald) driverData(p *provider.Provider) (map[string]string, error) { //nolint:unparam // credential decryption lands here and can fail
-	data := make(map[string]string, len(p.Credentials)+len(p.Settings))
-	maps.Copy(data, p.Credentials)
+// driverData is the map a driver reads: credentials decrypted, then settings,
+// with settings winning a key collision, which is how Send has always merged
+// them. A credential encrypted under a key that isn't configured fails here.
+func (h *Herald) driverData(p *provider.Provider) (map[string]string, error) {
+	creds, err := h.open(p)
+	if err != nil {
+		return nil, err
+	}
+	data := make(map[string]string, len(creds)+len(p.Settings))
+	maps.Copy(data, creds)
 	maps.Copy(data, p.Settings)
 	return data, nil
 }
@@ -501,13 +507,19 @@ func (h *Herald) SeedConfiguredProviders(ctx context.Context, providers []provid
 			continue
 		}
 
-		if drv, err := h.drivers.Get(p.Driver); err != nil {
-			h.logger.Warn("herald: configured provider references unregistered driver",
-				"name", p.Name, "driver", p.Driver)
-		} else if vErr := drv.Validate(p.Credentials, p.Settings); vErr != nil {
-			h.logger.Warn("herald: configured provider failed driver validation",
+		if vErr := h.ValidateProvider(&p); vErr != nil {
+			h.logger.Warn("herald: configured provider failed validation; seeding it anyway",
 				"name", p.Name, "driver", p.Driver, "error", vErr)
 		}
+		if p.ID.IsNil() {
+			p.ID = id.NewProviderID() // the credential cipher binds to the ID
+		}
+		sealed, err := h.seal(p.ID.String(), p.Credentials, slices.Collect(maps.Keys(p.Credentials)))
+		if err != nil {
+			h.logger.Warn("herald: failed to encrypt configured provider credentials", "name", p.Name, "error", err)
+			continue
+		}
+		p.Credentials = sealed
 
 		if err := h.store.CreateProvider(ctx, &p); err != nil {
 			h.logger.Warn("herald: failed to seed configured provider",

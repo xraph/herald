@@ -1,9 +1,11 @@
 package herald
 
 import (
+	"errors"
 	"log/slog"
 
 	"github.com/xraph/herald/bridge"
+	"github.com/xraph/herald/credential"
 	"github.com/xraph/herald/driver"
 	"github.com/xraph/herald/scope"
 	"github.com/xraph/herald/store"
@@ -19,6 +21,11 @@ type Herald struct {
 	resolver  *scope.Resolver
 	chronicle bridge.Chronicle
 	logger    *slog.Logger
+
+	// credential encryption, built in New from the options below
+	cipher       *credential.Cipher
+	currentKey   *credential.Key
+	previousKeys []credential.Key
 }
 
 // Option configures a Herald instance.
@@ -40,6 +47,17 @@ func New(opts ...Option) (*Herald, error) {
 
 	if h.store == nil {
 		return nil, ErrNoStore
+	}
+
+	if h.currentKey == nil && len(h.previousKeys) > 0 {
+		return nil, errors.New("herald: previous credential keys need a current key to encrypt with")
+	}
+	if h.currentKey != nil {
+		c, err := credential.NewCipher(*h.currentKey, h.previousKeys...)
+		if err != nil {
+			return nil, err
+		}
+		h.cipher = c
 	}
 
 	h.wireServices()
@@ -92,6 +110,28 @@ func WithChronicle(c bridge.Chronicle) Option {
 		return nil
 	}
 }
+
+// WithCredentialKey sets the AES-256 key that encrypts provider credentials
+// written from now on. keyID is stored beside every value it encrypts.
+func WithCredentialKey(keyID string, key []byte) Option {
+	return func(h *Herald) error {
+		h.currentKey = &credential.Key{ID: keyID, Bytes: key}
+		return nil
+	}
+}
+
+// WithPreviousCredentialKey adds a key that only decrypts, so values written
+// under a rotated-out key keep working. Give it once per old key.
+func WithPreviousCredentialKey(keyID string, key []byte) Option {
+	return func(h *Herald) error {
+		h.previousKeys = append(h.previousKeys, credential.Key{ID: keyID, Bytes: key})
+		return nil
+	}
+}
+
+// CredentialKeyID is the ID of the key new credentials are encrypted under,
+// or "" when none is configured and credentials are stored in plaintext.
+func (h *Herald) CredentialKeyID() string { return h.cipher.KeyID() }
 
 // WithMaxBatchSize sets the maximum number of notifications per batch send.
 func WithMaxBatchSize(n int) Option {

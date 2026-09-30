@@ -3,6 +3,7 @@ package herald
 import (
 	"errors"
 
+	"github.com/xraph/herald/credential"
 	"github.com/xraph/herald/store"
 	"github.com/xraph/herald/template"
 )
@@ -74,4 +75,16 @@ var (
 
 	// ErrDuplicateLocale is returned when a template version for the same locale already exists.
 	ErrDuplicateLocale = store.ErrDuplicateLocale
+
+	// ErrInvalidProvider wraps a provider that failed validation. The message
+	// names the problem and never a credential value.
+	ErrInvalidProvider = errors.New("herald: invalid provider")
+
+	// ErrNoCredentialKey is returned by operations that need a credential key
+	// when none is configured.
+	ErrNoCredentialKey = errors.New("herald: no credential key is configured")
+
+	// ErrCredentialKeyUnavailable means a credential was encrypted under a key
+	// that isn't configured. The message names the key ID.
+	ErrCredentialKeyUnavailable = credential.ErrKeyUnavailable
 )
