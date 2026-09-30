@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -70,17 +71,17 @@ func (d *Driver) Send(ctx context.Context, msg *driver.OutboundMessage) (*driver
 	endpoint, err := withWait(webhookURL)
 	if err != nil {
 		// The URL embeds Discord's token, so the error must not repeat it.
-		return nil, fmt.Errorf("discord: webhook_url is not a valid URL")
+		return nil, errors.New("discord: webhook_url is not a valid URL")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("discord: create request: %w", err)
+		return nil, errors.New("discord: webhook_url is not a valid URL")
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("discord: send request: %w", err)
+		return nil, fmt.Errorf("discord: send request: %w", stripURL(err))
 	}
 	defer resp.Body.Close()
 
@@ -111,4 +112,15 @@ func withWait(raw string) (string, error) {
 	q.Set("wait", "true")
 	u.RawQuery = q.Encode()
 	return u.String(), nil
+}
+
+// stripURL drops the request URL from a transport error. http.Client wraps
+// failures in a *url.Error whose text quotes the full URL, and a webhook URL
+// carries its token.
+func stripURL(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return ue.Err
+	}
+	return err
 }

@@ -12,9 +12,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/xraph/relay"
@@ -108,12 +110,13 @@ func (d *Driver) sendViaRelay(ctx context.Context, _ string, body []byte, eventT
 	}, nil
 }
 
-func (d *Driver) sendDirect(ctx context.Context, url string, body []byte, signingSecret string) (*driver.DeliveryResult, error) {
+func (d *Driver) sendDirect(ctx context.Context, webhookURL string, body []byte, signingSecret string) (*driver.DeliveryResult, error) {
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhookURL, bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("webhook: create request: %w", err)
+		// The URL carries the endpoint's token, so the error must not repeat it.
+		return nil, errors.New("webhook: url is not a valid URL")
 	}
 	req.Header.Set("Content-Type", "application/json")
 
@@ -124,7 +127,7 @@ func (d *Driver) sendDirect(ctx context.Context, url string, body []byte, signin
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("webhook: send request: %w", err)
+		return nil, fmt.Errorf("webhook: send request: %w", stripURL(err))
 	}
 	defer resp.Body.Close()
 
@@ -142,4 +145,15 @@ func computeHMAC(payload []byte, secret string) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write(payload)
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+}
+
+// stripURL drops the request URL from a transport error. http.Client wraps
+// failures in a *url.Error whose text quotes the full URL, and a webhook URL
+// carries its token.
+func stripURL(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return ue.Err
+	}
+	return err
 }

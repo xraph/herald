@@ -9,9 +9,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/xraph/herald/driver"
@@ -58,7 +60,7 @@ func (d *Driver) Send(ctx context.Context, msg *driver.OutboundMessage) (*driver
 	return d.sendAPI(ctx, msg)
 }
 
-func (d *Driver) sendWebhook(ctx context.Context, url string, msg *driver.OutboundMessage) (*driver.DeliveryResult, error) {
+func (d *Driver) sendWebhook(ctx context.Context, webhookURL string, msg *driver.OutboundMessage) (*driver.DeliveryResult, error) {
 	text := formatMessage(msg)
 	payload := slackWebhookPayload{Text: text}
 
@@ -69,15 +71,16 @@ func (d *Driver) sendWebhook(ctx context.Context, url string, msg *driver.Outbou
 
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhookURL, bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("slack: create request: %w", err)
+		// The URL carries the webhook's token, so the error must not repeat it.
+		return nil, errors.New("slack: webhook_url is not a valid URL")
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("slack: send request: %w", err)
+		return nil, fmt.Errorf("slack: send request: %w", stripURL(err))
 	}
 	defer resp.Body.Close()
 
@@ -156,4 +159,15 @@ func formatMessage(msg *driver.OutboundMessage) string {
 		return msg.Title
 	}
 	return "New notification"
+}
+
+// stripURL drops the request URL from a transport error. http.Client wraps
+// failures in a *url.Error whose text quotes the full URL, and a webhook URL
+// carries its token.
+func stripURL(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return ue.Err
+	}
+	return err
 }
