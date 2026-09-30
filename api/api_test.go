@@ -75,6 +75,9 @@ func (x *harness) do(t *testing.T, method, path string, body any) *httptest.Resp
 	if strings.Contains(rec.Body.String(), canary) {
 		t.Fatalf("%s %s leaked a credential value: %s", method, path, rec.Body)
 	}
+	if strings.Contains(rec.Body.String(), "enc:v1:") {
+		t.Fatalf("%s %s leaked an encrypted credential: %s", method, path, rec.Body)
+	}
 	return rec
 }
 
@@ -100,16 +103,62 @@ func (x *harness) createProvider(t *testing.T, appID string) api.ProviderRespons
 }
 
 func TestCredentialValuesNeverLeave(t *testing.T) {
-	x := newHarness(t)
-	p := x.createProvider(t, "app_a")
-	if len(p.Credentials) != 1 || p.Credentials[0].Key != "api_key" ||
-		p.Credentials[0].Protection != herald.ProtectionAESGCM || p.Credentials[0].KeyID != "k1" {
-		t.Errorf("credentials = %+v", p.Credentials)
+	for _, keyed := range []bool{true, false} {
+		name := "plaintext store"
+		if keyed {
+			name = "encrypted store"
+		}
+		t.Run(name, func(t *testing.T) {
+			x := buildHarness(t)
+			protection, keyID := herald.ProtectionPlaintext, ""
+			if keyed {
+				x = newHarness(t)
+				protection, keyID = herald.ProtectionAESGCM, "k1"
+			}
+			p := x.createProvider(t, "app_a")
+			if len(p.Credentials) != 1 || p.Credentials[0].Key != "api_key" ||
+				p.Credentials[0].Protection != protection || p.Credentials[0].KeyID != keyID {
+				t.Errorf("credentials = %+v", p.Credentials)
+			}
+			// do() fails the test on any response containing the canary or
+			// an encrypted value. Without a key the store holds the canary
+			// itself, so a leak can't hide behind ciphertext.
+			for _, r := range []struct {
+				method, path string
+				body         any
+			}{
+				{http.MethodGet, "/v1/providers?app_id=app_a", nil},
+				{http.MethodGet, "/v1/providers?app_id=app_a&channel=email", nil},
+				{http.MethodGet, "/v1/providers/" + p.ID + "?app_id=app_a", nil},
+				{http.MethodPut, "/v1/providers/" + p.ID + "?app_id=app_a", map[string]any{"name": "renamed"}},
+			} {
+				if rec := x.do(t, r.method, r.path, r.body); rec.Code != http.StatusOK {
+					t.Errorf("%s %s = %d %s", r.method, r.path, rec.Code, rec.Body)
+				}
+			}
+		})
 	}
-	// do() fails the test on any response containing the canary.
-	x.do(t, http.MethodGet, "/v1/providers?app_id=app_a", nil)
-	x.do(t, http.MethodGet, "/v1/providers/"+p.ID+"?app_id=app_a", nil)
-	x.do(t, http.MethodPut, "/v1/providers/"+p.ID+"?app_id=app_a", map[string]any{"name": "renamed"})
+}
+
+func TestListRoutesNeedOnlyTheAppID(t *testing.T) {
+	x := newHarness(t)
+	for _, path := range []string{
+		"/v1/providers?app_id=app_a",
+		"/v1/templates?app_id=app_a",
+		"/v1/messages?app_id=app_a",
+		"/v1/messages?app_id=app_a&channel=email&status=sent&offset=0&limit=10",
+		"/v1/inbox?app_id=app_a&user_id=u1",
+		"/v1/inbox?app_id=app_a&user_id=u1&offset=0&limit=10",
+	} {
+		if rec := x.do(t, http.MethodGet, path, nil); rec.Code != http.StatusOK {
+			t.Errorf("GET %s = %d %s, want 200", path, rec.Code, rec.Body)
+		}
+	}
+	for _, path := range []string{"/v1/providers", "/v1/templates", "/v1/messages"} {
+		if rec := x.do(t, http.MethodGet, path, nil); rec.Code != http.StatusBadRequest {
+			t.Errorf("GET %s without app_id = %d, want 400", path, rec.Code)
+		}
+	}
 }
 
 func TestUpdateWithoutEnabledKeepsItEnabled(t *testing.T) {

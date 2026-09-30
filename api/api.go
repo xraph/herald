@@ -65,7 +65,7 @@ type CreateProviderRequest struct {
 
 type ListProvidersRequest struct {
 	AppID   string `description:"Filter by app"     query:"app_id"`
-	Channel string `description:"Filter by channel" query:"channel"`
+	Channel string `description:"Filter by channel" optional:"true" query:"channel"`
 }
 
 type GetProviderRequest struct {
@@ -107,7 +107,7 @@ type CreateTemplateRequest struct {
 
 type ListTemplatesRequest struct {
 	AppID   string `description:"Filter by app"     query:"app_id"`
-	Channel string `description:"Filter by channel" query:"channel"`
+	Channel string `description:"Filter by channel" optional:"true" query:"channel"`
 }
 
 type GetTemplateRequest struct {
@@ -167,10 +167,10 @@ type DeleteVersionRequest struct {
 // Message requests
 type ListMessagesRequest struct {
 	AppID   string `description:"Filter by app"     query:"app_id"`
-	Channel string `description:"Filter by channel" query:"channel"`
-	Status  string `description:"Filter by status"  query:"status"`
-	Offset  int    `description:"Pagination offset" query:"offset"`
-	Limit   int    `description:"Page size"         query:"limit"`
+	Channel string `description:"Filter by channel" optional:"true" query:"channel"`
+	Status  string `description:"Filter by status"  optional:"true" query:"status"`
+	Offset  int    `description:"Pagination offset" optional:"true" query:"offset"`
+	Limit   int    `description:"Page size"         optional:"true" query:"limit"`
 }
 
 type GetMessageRequest struct {
@@ -182,8 +182,8 @@ type GetMessageRequest struct {
 type ListInboxRequest struct {
 	AppID  string `description:"Application ID" query:"app_id"`
 	UserID string `description:"User ID"        query:"user_id"`
-	Offset int    `description:"Offset"         query:"offset"`
-	Limit  int    `description:"Page size"      query:"limit"`
+	Offset int    `description:"Offset"         optional:"true" query:"offset"`
+	Limit  int    `description:"Page size"      optional:"true" query:"limit"`
 }
 
 type UnreadCountRequest struct {
