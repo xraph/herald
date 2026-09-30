@@ -4,6 +4,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/xraph/forge"
@@ -66,22 +67,29 @@ type ListProvidersRequest struct {
 }
 
 type GetProviderRequest struct {
-	ID string `description:"Provider ID" path:"id"`
+	AppID string `description:"Application ID" optional:"true" query:"app_id"`
+	ID    string `description:"Provider ID" path:"id"`
 }
 
+// UpdateProviderRequest changes only what it sends. Credentials and settings
+// merge: keys sent are set, keys in the remove lists are deleted, and
+// everything else is kept. A provider's channel and driver can't change;
+// create a new provider instead.
 type UpdateProviderRequest struct {
-	ID          string            `description:"Provider ID"        path:"id"`
-	Name        string            `description:"Provider name"      json:"name,omitempty"`
-	Channel     string            `description:"Channel type"       json:"channel,omitempty"`
-	Driver      string            `description:"Driver name"        json:"driver,omitempty"`
-	Credentials map[string]string `description:"Driver credentials" json:"credentials,omitempty"`
-	Settings    map[string]string `description:"Driver settings"    json:"settings,omitempty"`
-	Priority    int               `description:"Priority order"     json:"priority,omitempty"`
-	Enabled     bool              `description:"Is enabled"         json:"enabled,omitempty"`
+	ID                string            `description:"Provider ID"                path:"id"`
+	AppID             string            `description:"Application ID"             optional:"true" query:"app_id"`
+	Name              *string           `description:"Provider name"              json:"name,omitempty"`
+	Priority          *int              `description:"Priority order"             json:"priority,omitempty"`
+	Enabled           *bool             `description:"Is enabled"                 json:"enabled,omitempty"`
+	Credentials       map[string]string `description:"Credentials to set"         json:"credentials,omitempty"`
+	RemoveCredentials []string          `description:"Credential keys to remove"  json:"remove_credentials,omitempty"`
+	Settings          map[string]string `description:"Settings to set"            json:"settings,omitempty"`
+	RemoveSettings    []string          `description:"Setting keys to remove"     json:"remove_settings,omitempty"`
 }
 
 type DeleteProviderRequest struct {
-	ID string `description:"Provider ID" path:"id"`
+	AppID string `description:"Application ID" optional:"true" query:"app_id"`
+	ID    string `description:"Provider ID" path:"id"`
 }
 
 // Template requests
@@ -90,7 +98,7 @@ type CreateTemplateRequest struct {
 	Slug      string              `description:"Template slug"       json:"slug"`
 	Name      string              `description:"Template name"       json:"name"`
 	Channel   string              `description:"Channel type"        json:"channel"`
-	Category  string              `description:"Template category"   json:"category"`
+	Category  string              `description:"Template category"   json:"category,omitempty"`
 	Variables []template.Variable `description:"Template variables"  json:"variables"`
 	Enabled   bool                `description:"Is enabled"          json:"enabled"`
 }
@@ -101,48 +109,55 @@ type ListTemplatesRequest struct {
 }
 
 type GetTemplateRequest struct {
-	ID string `description:"Template ID" path:"id"`
+	AppID string `description:"Application ID" optional:"true" query:"app_id"`
+	ID    string `description:"Template ID" path:"id"`
 }
 
 type UpdateTemplateRequest struct {
-	ID        string              `description:"Template ID"         path:"id"`
-	Slug      string              `description:"Template slug"       json:"slug,omitempty"`
-	Name      string              `description:"Template name"       json:"name,omitempty"`
-	Channel   string              `description:"Channel type"        json:"channel,omitempty"`
-	Category  string              `description:"Template category"   json:"category,omitempty"`
-	Variables []template.Variable `description:"Template variables"  json:"variables,omitempty"`
-	Enabled   bool                `description:"Is enabled"          json:"enabled,omitempty"`
+	ID        string               `description:"Template ID"        path:"id"`
+	AppID     string               `description:"Application ID"     optional:"true" query:"app_id"`
+	Slug      *string              `description:"Template slug"      json:"slug,omitempty"`
+	Name      *string              `description:"Template name"      json:"name,omitempty"`
+	Channel   *string              `description:"Channel type"       json:"channel,omitempty"`
+	Category  *string              `description:"Template category"  json:"category,omitempty"`
+	Variables *[]template.Variable `description:"Template variables" json:"variables,omitempty"`
+	Enabled   *bool                `description:"Is enabled"         json:"enabled,omitempty"`
 }
 
 type DeleteTemplateRequest struct {
-	ID string `description:"Template ID" path:"id"`
+	AppID string `description:"Application ID" optional:"true" query:"app_id"`
+	ID    string `description:"Template ID" path:"id"`
 }
 
 type CreateVersionRequest struct {
+	AppID      string `description:"Application ID" optional:"true" query:"app_id"`
 	TemplateID string `description:"Template ID" path:"id"`
 	Locale     string `description:"Locale code" json:"locale"`
-	Subject    string `description:"Subject"     json:"subject"`
-	HTML       string `description:"HTML body"   json:"html"`
-	Text       string `description:"Text body"   json:"text"`
-	Title      string `description:"Title"       json:"title"`
+	Subject    string `description:"Subject"     json:"subject,omitempty"`
+	HTML       string `description:"HTML body"   json:"html,omitempty"`
+	Text       string `description:"Text body"   json:"text,omitempty"`
+	Title      string `description:"Title"       json:"title,omitempty"`
 }
 
 type ListVersionsRequest struct {
+	AppID      string `description:"Application ID" optional:"true" query:"app_id"`
 	TemplateID string `description:"Template ID" path:"id"`
 }
 
 type UpdateVersionRequest struct {
-	TemplateID string `description:"Template ID"         path:"id"`
-	VersionID  string `description:"Version ID"          path:"versionId"`
-	Locale     string `description:"Locale code"         json:"locale,omitempty"`
-	Subject    string `description:"Subject"             json:"subject,omitempty"`
-	HTML       string `description:"HTML body"           json:"html,omitempty"`
-	Text       string `description:"Text body"           json:"text,omitempty"`
-	Title      string `description:"Title"               json:"title,omitempty"`
-	Active     *bool  `description:"Is active"           json:"active,omitempty"`
+	TemplateID string  `description:"Template ID"    path:"id"`
+	VersionID  string  `description:"Version ID"     path:"versionId"`
+	AppID      string  `description:"Application ID" optional:"true" query:"app_id"`
+	Locale     *string `description:"Locale code"    json:"locale,omitempty"`
+	Subject    *string `description:"Subject"        json:"subject,omitempty"`
+	HTML       *string `description:"HTML body"      json:"html,omitempty"`
+	Text       *string `description:"Text body"      json:"text,omitempty"`
+	Title      *string `description:"Title"          json:"title,omitempty"`
+	Active     *bool   `description:"Is active"      json:"active,omitempty"`
 }
 
 type DeleteVersionRequest struct {
+	AppID      string `description:"Application ID" optional:"true" query:"app_id"`
 	TemplateID string `description:"Template ID" path:"id"`
 	VersionID  string `description:"Version ID"  path:"versionId"`
 }
@@ -157,7 +172,8 @@ type ListMessagesRequest struct {
 }
 
 type GetMessageRequest struct {
-	ID string `description:"Message ID" path:"id"`
+	AppID string `description:"Application ID" optional:"true" query:"app_id"`
+	ID    string `description:"Message ID" path:"id"`
 }
 
 // Inbox requests
@@ -174,7 +190,8 @@ type UnreadCountRequest struct {
 }
 
 type MarkReadRequest struct {
-	ID string `description:"Notification ID" path:"id"`
+	AppID string `description:"Application ID" optional:"true" query:"app_id"`
+	ID    string `description:"Notification ID" path:"id"`
 }
 
 type MarkAllReadRequest struct {
@@ -183,7 +200,8 @@ type MarkAllReadRequest struct {
 }
 
 type DeleteInboxRequest struct {
-	ID string `description:"Notification ID" path:"id"`
+	AppID string `description:"Application ID" optional:"true" query:"app_id"`
+	ID    string `description:"Notification ID" path:"id"`
 }
 
 // Preference requests
@@ -204,38 +222,44 @@ type GetConfigRequest struct {
 }
 
 type SetAppConfigRequest struct {
-	AppID           string `description:"Application ID"    json:"app_id"`
-	EmailProviderID string `description:"Email provider ID" json:"email_provider_id,omitempty"`
-	SMSProviderID   string `description:"SMS provider ID"   json:"sms_provider_id,omitempty"`
-	PushProviderID  string `description:"Push provider ID"  json:"push_provider_id,omitempty"`
-	FromEmail       string `description:"Sender email"      json:"from_email,omitempty"`
-	FromName        string `description:"Sender name"       json:"from_name,omitempty"`
-	FromPhone       string `description:"Sender phone"      json:"from_phone,omitempty"`
-	DefaultLocale   string `description:"Default locale"    json:"default_locale,omitempty"`
+	AppID             string `description:"Application ID"    json:"app_id"`
+	EmailProviderID   string `description:"Email provider ID" json:"email_provider_id,omitempty"`
+	SMSProviderID     string `description:"SMS provider ID"   json:"sms_provider_id,omitempty"`
+	PushProviderID    string `description:"Push provider ID"  json:"push_provider_id,omitempty"`
+	FromEmail         string `description:"Sender email"      json:"from_email,omitempty"`
+	FromName          string `description:"Sender name"       json:"from_name,omitempty"`
+	FromPhone         string `description:"Sender phone"      json:"from_phone,omitempty"`
+	DefaultLocale     string `description:"Default locale"    json:"default_locale,omitempty"`
+	WebhookProviderID string `description:"Webhook provider ID" json:"webhook_provider_id,omitempty"`
+	ChatProviderID    string `description:"Chat provider ID"    json:"chat_provider_id,omitempty"`
 }
 
 type SetOrgConfigRequest struct {
-	OrgID           string `description:"Organization ID"   path:"orgId"`
-	AppID           string `description:"Application ID"    json:"app_id"`
-	EmailProviderID string `description:"Email provider ID" json:"email_provider_id,omitempty"`
-	SMSProviderID   string `description:"SMS provider ID"   json:"sms_provider_id,omitempty"`
-	PushProviderID  string `description:"Push provider ID"  json:"push_provider_id,omitempty"`
-	FromEmail       string `description:"Sender email"      json:"from_email,omitempty"`
-	FromName        string `description:"Sender name"       json:"from_name,omitempty"`
-	FromPhone       string `description:"Sender phone"      json:"from_phone,omitempty"`
-	DefaultLocale   string `description:"Default locale"    json:"default_locale,omitempty"`
+	OrgID             string `description:"Organization ID"   path:"orgId"`
+	AppID             string `description:"Application ID"    json:"app_id"`
+	EmailProviderID   string `description:"Email provider ID" json:"email_provider_id,omitempty"`
+	SMSProviderID     string `description:"SMS provider ID"   json:"sms_provider_id,omitempty"`
+	PushProviderID    string `description:"Push provider ID"  json:"push_provider_id,omitempty"`
+	FromEmail         string `description:"Sender email"      json:"from_email,omitempty"`
+	FromName          string `description:"Sender name"       json:"from_name,omitempty"`
+	FromPhone         string `description:"Sender phone"      json:"from_phone,omitempty"`
+	DefaultLocale     string `description:"Default locale"    json:"default_locale,omitempty"`
+	WebhookProviderID string `description:"Webhook provider ID" json:"webhook_provider_id,omitempty"`
+	ChatProviderID    string `description:"Chat provider ID"    json:"chat_provider_id,omitempty"`
 }
 
 type SetUserConfigRequest struct {
-	UserID          string `description:"User ID"           path:"userId"`
-	AppID           string `description:"Application ID"    json:"app_id"`
-	EmailProviderID string `description:"Email provider ID" json:"email_provider_id,omitempty"`
-	SMSProviderID   string `description:"SMS provider ID"   json:"sms_provider_id,omitempty"`
-	PushProviderID  string `description:"Push provider ID"  json:"push_provider_id,omitempty"`
-	FromEmail       string `description:"Sender email"      json:"from_email,omitempty"`
-	FromName        string `description:"Sender name"       json:"from_name,omitempty"`
-	FromPhone       string `description:"Sender phone"      json:"from_phone,omitempty"`
-	DefaultLocale   string `description:"Default locale"    json:"default_locale,omitempty"`
+	UserID            string `description:"User ID"           path:"userId"`
+	AppID             string `description:"Application ID"    json:"app_id"`
+	EmailProviderID   string `description:"Email provider ID" json:"email_provider_id,omitempty"`
+	SMSProviderID     string `description:"SMS provider ID"   json:"sms_provider_id,omitempty"`
+	PushProviderID    string `description:"Push provider ID"  json:"push_provider_id,omitempty"`
+	FromEmail         string `description:"Sender email"      json:"from_email,omitempty"`
+	FromName          string `description:"Sender name"       json:"from_name,omitempty"`
+	FromPhone         string `description:"Sender phone"      json:"from_phone,omitempty"`
+	DefaultLocale     string `description:"Default locale"    json:"default_locale,omitempty"`
+	WebhookProviderID string `description:"Webhook provider ID" json:"webhook_provider_id,omitempty"`
+	ChatProviderID    string `description:"Chat provider ID"    json:"chat_provider_id,omitempty"`
 }
 
 type DeleteOrgConfigRequest struct {
@@ -263,10 +287,21 @@ func (a *ForgeAPI) registerProviderRoutes(router forge.Router) {
 		forge.WithDescription("Creates a new notification provider."),
 		forge.WithOperationID("createProvider"),
 		forge.WithRequestSchema(CreateProviderRequest{}),
-		forge.WithCreatedResponse(provider.Provider{}),
+		forge.WithCreatedResponse(ProviderResponse{}),
 		forge.WithErrorResponses(),
 	); err != nil {
 		a.logger.Error("failed to register createProvider route", forge.Error(err))
+	}
+
+	if err := g.POST("/encrypt", a.encryptProviders,
+		forge.WithSummary("Encrypt stored credentials"),
+		forge.WithDescription("Encrypts every plaintext credential of every provider in the app. Needs a credential key."),
+		forge.WithOperationID("encryptProviderCredentials"),
+		forge.WithRequestSchema(EncryptProvidersRequest{}),
+		forge.WithResponseSchema(http.StatusOK, "What changed", herald.EncryptReport{}),
+		forge.WithErrorResponses(),
+	); err != nil {
+		a.logger.Error("failed to register encryptProviderCredentials route", forge.Error(err))
 	}
 
 	if err := g.GET("", a.listProviders,
@@ -274,7 +309,7 @@ func (a *ForgeAPI) registerProviderRoutes(router forge.Router) {
 		forge.WithDescription("Returns a list of notification providers."),
 		forge.WithOperationID("listProviders"),
 		forge.WithRequestSchema(ListProvidersRequest{}),
-		forge.WithListResponse(provider.Provider{}, http.StatusOK),
+		forge.WithListResponse(ProviderResponse{}, http.StatusOK),
 		forge.WithErrorResponses(),
 	); err != nil {
 		a.logger.Error("failed to register listProviders route", forge.Error(err))
@@ -284,7 +319,7 @@ func (a *ForgeAPI) registerProviderRoutes(router forge.Router) {
 		forge.WithSummary("Get provider"),
 		forge.WithDescription("Returns details of a specific provider."),
 		forge.WithOperationID("getProvider"),
-		forge.WithResponseSchema(http.StatusOK, "Provider details", provider.Provider{}),
+		forge.WithResponseSchema(http.StatusOK, "Provider details", ProviderResponse{}),
 		forge.WithErrorResponses(),
 	); err != nil {
 		a.logger.Error("failed to register getProvider route", forge.Error(err))
@@ -295,7 +330,7 @@ func (a *ForgeAPI) registerProviderRoutes(router forge.Router) {
 		forge.WithDescription("Updates an existing provider."),
 		forge.WithOperationID("updateProvider"),
 		forge.WithRequestSchema(UpdateProviderRequest{}),
-		forge.WithResponseSchema(http.StatusOK, "Updated provider", provider.Provider{}),
+		forge.WithResponseSchema(http.StatusOK, "Updated provider", ProviderResponse{}),
 		forge.WithErrorResponses(),
 	); err != nil {
 		a.logger.Error("failed to register updateProvider route", forge.Error(err))
@@ -615,28 +650,18 @@ func (a *ForgeAPI) registerConfigRoutes(router forge.Router) {
 
 // ─── Provider Handlers ──────────────────────────────
 
-func (a *ForgeAPI) createProvider(ctx forge.Context, req *CreateProviderRequest) (*provider.Provider, error) {
-	now := time.Now().UTC()
+func (a *ForgeAPI) createProvider(ctx forge.Context, req *CreateProviderRequest) (*ProviderResponse, error) {
 	p := &provider.Provider{
-		ID:          id.NewProviderID(),
-		AppID:       req.AppID,
-		Name:        req.Name,
-		Channel:     req.Channel,
-		Driver:      req.Driver,
-		Credentials: req.Credentials,
-		Settings:    req.Settings,
-		Priority:    req.Priority,
-		Enabled:     req.Enabled,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		AppID: req.AppID, Name: req.Name, Channel: req.Channel, Driver: req.Driver,
+		Credentials: req.Credentials, Settings: req.Settings, Priority: req.Priority, Enabled: req.Enabled,
 	}
-	if err := a.store.CreateProvider(ctx.Context(), p); err != nil {
+	if err := a.herald.CreateProvider(ctx.Context(), p); err != nil {
 		return nil, mapError(err)
 	}
 	a.herald.Audit(ctx.Context(), bridge.SeverityInfo, bridge.OutcomeSuccess, "provider.create", "provider", p.ID.String(), "", req.AppID, "provider", map[string]string{
-		"name": req.Name, "channel": req.Channel, "driver": req.Driver,
+		"name": p.Name, "channel": p.Channel, "driver": p.Driver,
 	})
-	if err := ctx.JSON(http.StatusCreated, p); err != nil {
+	if err := ctx.JSON(http.StatusCreated, a.providerResponse(p)); err != nil {
 		return nil, err
 	}
 	return nil, nil //nolint:nilnil // response already sent via ctx
@@ -653,71 +678,56 @@ func (a *ForgeAPI) listProviders(ctx forge.Context, req *ListProvidersRequest) (
 	if err != nil {
 		return nil, mapError(err)
 	}
-	if err := ctx.JSON(http.StatusOK, providers); err != nil {
+	out := make([]*ProviderResponse, 0, len(providers))
+	for _, p := range providers {
+		out = append(out, a.providerResponse(p))
+	}
+	if err := ctx.JSON(http.StatusOK, out); err != nil {
 		return nil, err
 	}
 	return nil, nil //nolint:nilnil // response already sent via ctx
 }
 
-func (a *ForgeAPI) getProvider(ctx forge.Context, req *GetProviderRequest) (*provider.Provider, error) {
-	pid, err := id.ParseProviderID(req.ID)
+func (a *ForgeAPI) getProvider(ctx forge.Context, req *GetProviderRequest) (*ProviderResponse, error) {
+	pid, err := parseProviderID(req.ID)
 	if err != nil {
-		return nil, forge.BadRequest("invalid provider ID")
+		return nil, err
 	}
-	p, err := a.store.GetProvider(ctx.Context(), pid)
+	p, err := a.herald.GetProvider(ctx.Context(), req.AppID, pid)
 	if err != nil {
 		return nil, mapError(err)
 	}
-	return p, nil
+	return a.providerResponse(p), nil
 }
 
-func (a *ForgeAPI) updateProvider(ctx forge.Context, req *UpdateProviderRequest) (*provider.Provider, error) {
-	pid, err := id.ParseProviderID(req.ID)
+func (a *ForgeAPI) updateProvider(ctx forge.Context, req *UpdateProviderRequest) (*ProviderResponse, error) {
+	pid, err := parseProviderID(req.ID)
 	if err != nil {
-		return nil, forge.BadRequest("invalid provider ID")
+		return nil, err
 	}
-	existing, err := a.store.GetProvider(ctx.Context(), pid)
-	if err != nil {
-		return nil, mapError(err)
-	}
-	if req.Name != "" {
-		existing.Name = req.Name
-	}
-	if req.Channel != "" {
-		existing.Channel = req.Channel
-	}
-	if req.Driver != "" {
-		existing.Driver = req.Driver
-	}
-	if req.Credentials != nil {
-		existing.Credentials = req.Credentials
-	}
-	if req.Settings != nil {
-		existing.Settings = req.Settings
-	}
-	if req.Priority != 0 {
-		existing.Priority = req.Priority
-	}
-	existing.Enabled = req.Enabled
-	existing.UpdatedAt = time.Now().UTC()
-	if err := a.store.UpdateProvider(ctx.Context(), existing); err != nil {
-		return nil, mapError(err)
-	}
-	a.herald.Audit(ctx.Context(), bridge.SeverityInfo, bridge.OutcomeSuccess, "provider.update", "provider", existing.ID.String(), "", existing.AppID, "provider", map[string]string{
-		"name": existing.Name, "channel": existing.Channel,
+	p, err := a.herald.UpdateProvider(ctx.Context(), req.AppID, pid, herald.ProviderUpdate{
+		Name: req.Name, Priority: req.Priority, Enabled: req.Enabled,
+		SetCredentials: req.Credentials, RemoveCredentials: req.RemoveCredentials,
+		SetSettings: req.Settings, RemoveSettings: req.RemoveSettings,
 	})
-	return existing, nil
-}
-
-func (a *ForgeAPI) deleteProvider(ctx forge.Context, req *DeleteProviderRequest) (*provider.Provider, error) {
-	pid, err := id.ParseProviderID(req.ID)
 	if err != nil {
-		return nil, forge.BadRequest("invalid provider ID")
-	}
-	if err := a.store.DeleteProvider(ctx.Context(), pid); err != nil {
 		return nil, mapError(err)
 	}
-	a.herald.Audit(ctx.Context(), bridge.SeverityWarning, bridge.OutcomeSuccess, "provider.delete", "provider", pid.String(), "", "", "provider", nil)
+	a.herald.Audit(ctx.Context(), bridge.SeverityInfo, bridge.OutcomeSuccess, "provider.update", "provider", p.ID.String(), "", p.AppID, "provider", map[string]string{
+		"name": p.Name, "channel": p.Channel,
+	})
+	return a.providerResponse(p), nil
+}
+
+func (a *ForgeAPI) deleteProvider(ctx forge.Context, req *DeleteProviderRequest) (*ProviderResponse, error) {
+	pid, err := parseProviderID(req.ID)
+	if err != nil {
+		return nil, err
+	}
+	if err := a.herald.DeleteProvider(ctx.Context(), req.AppID, pid); err != nil {
+		return nil, mapError(err)
+	}
+	a.herald.Audit(ctx.Context(), bridge.SeverityWarning, bridge.OutcomeSuccess, "provider.delete", "provider", pid.String(), "", req.AppID, "provider", nil)
 	if err := ctx.NoContent(http.StatusNoContent); err != nil {
 		return nil, err
 	}
@@ -770,42 +780,32 @@ func (a *ForgeAPI) listTemplates(ctx forge.Context, req *ListTemplatesRequest) (
 }
 
 func (a *ForgeAPI) getTemplate(ctx forge.Context, req *GetTemplateRequest) (*template.Template, error) {
-	tid, err := id.ParseTemplateID(req.ID)
-	if err != nil {
-		return nil, forge.BadRequest("invalid template ID")
-	}
-	t, err := a.store.GetTemplate(ctx.Context(), tid)
-	if err != nil {
-		return nil, mapError(err)
-	}
-	return t, nil
+	return a.ownedTemplate(ctx.Context(), req.AppID, req.ID)
 }
 
 func (a *ForgeAPI) updateTemplate(ctx forge.Context, req *UpdateTemplateRequest) (*template.Template, error) {
-	tid, err := id.ParseTemplateID(req.ID)
+	existing, err := a.ownedTemplate(ctx.Context(), req.AppID, req.ID)
 	if err != nil {
-		return nil, forge.BadRequest("invalid template ID")
+		return nil, err
 	}
-	existing, err := a.store.GetTemplate(ctx.Context(), tid)
-	if err != nil {
-		return nil, mapError(err)
+	if req.Slug != nil {
+		existing.Slug = *req.Slug
 	}
-	if req.Slug != "" {
-		existing.Slug = req.Slug
+	if req.Name != nil {
+		existing.Name = *req.Name
 	}
-	if req.Name != "" {
-		existing.Name = req.Name
+	if req.Channel != nil {
+		existing.Channel = *req.Channel
 	}
-	if req.Channel != "" {
-		existing.Channel = req.Channel
-	}
-	if req.Category != "" {
-		existing.Category = req.Category
+	if req.Category != nil {
+		existing.Category = *req.Category
 	}
 	if req.Variables != nil {
-		existing.Variables = req.Variables
+		existing.Variables = *req.Variables
 	}
-	existing.Enabled = req.Enabled
+	if req.Enabled != nil {
+		existing.Enabled = *req.Enabled
+	}
 	existing.UpdatedAt = time.Now().UTC()
 	if err := a.store.UpdateTemplate(ctx.Context(), existing); err != nil {
 		return nil, mapError(err)
@@ -817,14 +817,14 @@ func (a *ForgeAPI) updateTemplate(ctx forge.Context, req *UpdateTemplateRequest)
 }
 
 func (a *ForgeAPI) deleteTemplate(ctx forge.Context, req *DeleteTemplateRequest) (*template.Template, error) {
-	tid, err := id.ParseTemplateID(req.ID)
+	t, err := a.ownedTemplate(ctx.Context(), req.AppID, req.ID)
 	if err != nil {
-		return nil, forge.BadRequest("invalid template ID")
+		return nil, err
 	}
-	if err := a.store.DeleteTemplate(ctx.Context(), tid); err != nil {
+	if err := a.store.DeleteTemplate(ctx.Context(), t.ID); err != nil {
 		return nil, mapError(err)
 	}
-	a.herald.Audit(ctx.Context(), bridge.SeverityWarning, bridge.OutcomeSuccess, "template.delete", "template", tid.String(), "", "", "template", nil)
+	a.herald.Audit(ctx.Context(), bridge.SeverityWarning, bridge.OutcomeSuccess, "template.delete", "template", t.ID.String(), "", t.AppID, "template", nil)
 	if err := ctx.NoContent(http.StatusNoContent); err != nil {
 		return nil, err
 	}
@@ -832,14 +832,14 @@ func (a *ForgeAPI) deleteTemplate(ctx forge.Context, req *DeleteTemplateRequest)
 }
 
 func (a *ForgeAPI) createVersion(ctx forge.Context, req *CreateVersionRequest) (*template.Version, error) {
-	templateID, err := id.ParseTemplateID(req.TemplateID)
+	t, err := a.ownedTemplate(ctx.Context(), req.AppID, req.TemplateID)
 	if err != nil {
-		return nil, forge.BadRequest("invalid template ID")
+		return nil, err
 	}
 	now := time.Now().UTC()
 	v := &template.Version{
 		ID:         id.NewTemplateVersionID(),
-		TemplateID: templateID,
+		TemplateID: t.ID,
 		Locale:     req.Locale,
 		Subject:    req.Subject,
 		HTML:       req.HTML,
@@ -862,11 +862,11 @@ func (a *ForgeAPI) createVersion(ctx forge.Context, req *CreateVersionRequest) (
 }
 
 func (a *ForgeAPI) listVersions(ctx forge.Context, req *ListVersionsRequest) (*struct{}, error) {
-	tid, err := id.ParseTemplateID(req.TemplateID)
+	t, err := a.ownedTemplate(ctx.Context(), req.AppID, req.TemplateID)
 	if err != nil {
-		return nil, forge.BadRequest("invalid template ID")
+		return nil, err
 	}
-	versions, err := a.store.ListVersions(ctx.Context(), tid)
+	versions, err := a.store.ListVersions(ctx.Context(), t.ID)
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -877,28 +877,24 @@ func (a *ForgeAPI) listVersions(ctx forge.Context, req *ListVersionsRequest) (*s
 }
 
 func (a *ForgeAPI) updateVersion(ctx forge.Context, req *UpdateVersionRequest) (*template.Version, error) {
-	vid, err := id.ParseTemplateVersionID(req.VersionID)
+	existing, err := a.ownedVersion(ctx.Context(), req.AppID, req.TemplateID, req.VersionID)
 	if err != nil {
-		return nil, forge.BadRequest("invalid version ID")
+		return nil, err
 	}
-	existing, err := a.store.GetVersion(ctx.Context(), vid)
-	if err != nil {
-		return nil, mapError(err)
+	if req.Locale != nil {
+		existing.Locale = *req.Locale
 	}
-	if req.Locale != "" {
-		existing.Locale = req.Locale
+	if req.Subject != nil {
+		existing.Subject = *req.Subject
 	}
-	if req.Subject != "" {
-		existing.Subject = req.Subject
+	if req.HTML != nil {
+		existing.HTML = *req.HTML
 	}
-	if req.HTML != "" {
-		existing.HTML = req.HTML
+	if req.Text != nil {
+		existing.Text = *req.Text
 	}
-	if req.Text != "" {
-		existing.Text = req.Text
-	}
-	if req.Title != "" {
-		existing.Title = req.Title
+	if req.Title != nil {
+		existing.Title = *req.Title
 	}
 	if req.Active != nil {
 		existing.Active = *req.Active
@@ -907,21 +903,21 @@ func (a *ForgeAPI) updateVersion(ctx forge.Context, req *UpdateVersionRequest) (
 	if err := a.store.UpdateVersion(ctx.Context(), existing); err != nil {
 		return nil, mapError(err)
 	}
-	a.herald.Audit(ctx.Context(), bridge.SeverityInfo, bridge.OutcomeSuccess, "template_version.update", "template_version", existing.ID.String(), "", "", "template", map[string]string{
+	a.herald.Audit(ctx.Context(), bridge.SeverityInfo, bridge.OutcomeSuccess, "template_version.update", "template_version", existing.ID.String(), "", req.AppID, "template", map[string]string{
 		"locale": existing.Locale,
 	})
 	return existing, nil
 }
 
 func (a *ForgeAPI) deleteVersion(ctx forge.Context, req *DeleteVersionRequest) (*template.Version, error) {
-	vid, err := id.ParseTemplateVersionID(req.VersionID)
+	v, err := a.ownedVersion(ctx.Context(), req.AppID, req.TemplateID, req.VersionID)
 	if err != nil {
-		return nil, forge.BadRequest("invalid version ID")
+		return nil, err
 	}
-	if err := a.store.DeleteVersion(ctx.Context(), vid); err != nil {
+	if err := a.store.DeleteVersion(ctx.Context(), v.ID); err != nil {
 		return nil, mapError(err)
 	}
-	a.herald.Audit(ctx.Context(), bridge.SeverityWarning, bridge.OutcomeSuccess, "template_version.delete", "template_version", vid.String(), "", "", "template", nil)
+	a.herald.Audit(ctx.Context(), bridge.SeverityWarning, bridge.OutcomeSuccess, "template_version.delete", "template_version", v.ID.String(), "", req.AppID, "template", nil)
 	if err := ctx.NoContent(http.StatusNoContent); err != nil {
 		return nil, err
 	}
@@ -972,15 +968,7 @@ func (a *ForgeAPI) listMessages(ctx forge.Context, req *ListMessagesRequest) (*s
 }
 
 func (a *ForgeAPI) getMessage(ctx forge.Context, req *GetMessageRequest) (*message.Message, error) {
-	mid, err := id.ParseMessageID(req.ID)
-	if err != nil {
-		return nil, forge.BadRequest("invalid message ID")
-	}
-	msg, err := a.store.GetMessage(ctx.Context(), mid)
-	if err != nil {
-		return nil, mapError(err)
-	}
-	return msg, nil
+	return a.ownedMessage(ctx.Context(), req.AppID, req.ID)
 }
 
 // ─── Inbox Handlers ──────────────────────────────
@@ -1010,11 +998,11 @@ func (a *ForgeAPI) unreadCount(ctx forge.Context, req *UnreadCountRequest) (*Unr
 }
 
 func (a *ForgeAPI) markRead(ctx forge.Context, req *MarkReadRequest) (*struct{}, error) {
-	nid, err := id.ParseInboxID(req.ID)
+	n, err := a.ownedNotification(ctx.Context(), req.AppID, req.ID)
 	if err != nil {
-		return nil, forge.BadRequest("invalid notification ID")
+		return nil, err
 	}
-	if err := a.store.MarkRead(ctx.Context(), nid); err != nil {
+	if err := a.store.MarkRead(ctx.Context(), n.ID); err != nil {
 		return nil, mapError(err)
 	}
 	if err := ctx.NoContent(http.StatusNoContent); err != nil {
@@ -1034,11 +1022,11 @@ func (a *ForgeAPI) markAllRead(ctx forge.Context, req *MarkAllReadRequest) (*str
 }
 
 func (a *ForgeAPI) deleteInboxItem(ctx forge.Context, req *DeleteInboxRequest) (*struct{}, error) {
-	nid, err := id.ParseInboxID(req.ID)
+	n, err := a.ownedNotification(ctx.Context(), req.AppID, req.ID)
 	if err != nil {
-		return nil, forge.BadRequest("invalid notification ID")
+		return nil, err
 	}
-	if err := a.store.DeleteNotification(ctx.Context(), nid); err != nil {
+	if err := a.store.DeleteNotification(ctx.Context(), n.ID); err != nil {
 		return nil, mapError(err)
 	}
 	if err := ctx.NoContent(http.StatusNoContent); err != nil {
@@ -1089,51 +1077,50 @@ func (a *ForgeAPI) getConfig(ctx forge.Context, req *GetConfigRequest) (*struct{
 }
 
 func (a *ForgeAPI) setAppConfig(ctx forge.Context, req *SetAppConfigRequest) (*scope.Config, error) {
-	return a.saveScopedConfig(ctx, req.AppID, scope.ScopeApp, req.AppID,
-		req.EmailProviderID, req.SMSProviderID, req.PushProviderID,
-		req.FromEmail, req.FromName, req.FromPhone, req.DefaultLocale)
+	return a.saveScopedConfig(ctx, &scope.Config{
+		AppID: req.AppID, Scope: scope.ScopeApp, ScopeID: req.AppID,
+		EmailProviderID: req.EmailProviderID, SMSProviderID: req.SMSProviderID, PushProviderID: req.PushProviderID,
+		WebhookProviderID: req.WebhookProviderID, ChatProviderID: req.ChatProviderID,
+		FromEmail: req.FromEmail, FromName: req.FromName, FromPhone: req.FromPhone, DefaultLocale: req.DefaultLocale,
+	})
 }
 
 func (a *ForgeAPI) setOrgConfig(ctx forge.Context, req *SetOrgConfigRequest) (*scope.Config, error) {
-	return a.saveScopedConfig(ctx, req.AppID, scope.ScopeOrg, req.OrgID,
-		req.EmailProviderID, req.SMSProviderID, req.PushProviderID,
-		req.FromEmail, req.FromName, req.FromPhone, req.DefaultLocale)
+	return a.saveScopedConfig(ctx, &scope.Config{
+		AppID: req.AppID, Scope: scope.ScopeOrg, ScopeID: req.OrgID,
+		EmailProviderID: req.EmailProviderID, SMSProviderID: req.SMSProviderID, PushProviderID: req.PushProviderID,
+		WebhookProviderID: req.WebhookProviderID, ChatProviderID: req.ChatProviderID,
+		FromEmail: req.FromEmail, FromName: req.FromName, FromPhone: req.FromPhone, DefaultLocale: req.DefaultLocale,
+	})
 }
 
 func (a *ForgeAPI) setUserConfig(ctx forge.Context, req *SetUserConfigRequest) (*scope.Config, error) {
-	return a.saveScopedConfig(ctx, req.AppID, scope.ScopeUser, req.UserID,
-		req.EmailProviderID, req.SMSProviderID, req.PushProviderID,
-		req.FromEmail, req.FromName, req.FromPhone, req.DefaultLocale)
+	return a.saveScopedConfig(ctx, &scope.Config{
+		AppID: req.AppID, Scope: scope.ScopeUser, ScopeID: req.UserID,
+		EmailProviderID: req.EmailProviderID, SMSProviderID: req.SMSProviderID, PushProviderID: req.PushProviderID,
+		WebhookProviderID: req.WebhookProviderID, ChatProviderID: req.ChatProviderID,
+		FromEmail: req.FromEmail, FromName: req.FromName, FromPhone: req.FromPhone, DefaultLocale: req.DefaultLocale,
+	})
 }
 
-func (a *ForgeAPI) saveScopedConfig(
-	ctx forge.Context,
-	appID string, scopeType scope.ScopeType, scopeID string,
-	emailPID, smsPID, pushPID, fromEmail, fromName, fromPhone, defaultLocale string,
-) (*scope.Config, error) {
+// saveScopedConfig upserts cfg and answers with the stored row. The store
+// keeps an existing row's ID on upsert, so the freshly minted ID below is
+// only used when the row is new.
+func (a *ForgeAPI) saveScopedConfig(ctx forge.Context, cfg *scope.Config) (*scope.Config, error) {
 	now := time.Now().UTC()
-	cfg := &scope.Config{
-		ID:              id.NewScopedConfigID(),
-		AppID:           appID,
-		Scope:           scopeType,
-		ScopeID:         scopeID,
-		EmailProviderID: emailPID,
-		SMSProviderID:   smsPID,
-		PushProviderID:  pushPID,
-		FromEmail:       fromEmail,
-		FromName:        fromName,
-		FromPhone:       fromPhone,
-		DefaultLocale:   defaultLocale,
-		CreatedAt:       now,
-		UpdatedAt:       now,
-	}
+	cfg.ID = id.NewScopedConfigID()
+	cfg.CreatedAt, cfg.UpdatedAt = now, now
 	if err := a.store.SetScopedConfig(ctx.Context(), cfg); err != nil {
 		return nil, mapError(err)
 	}
-	a.herald.Audit(ctx.Context(), bridge.SeverityInfo, bridge.OutcomeSuccess, "config.set", "scoped_config", cfg.ID.String(), "", appID, "config", map[string]string{
-		"scope": string(scopeType), "scope_id": scopeID,
+	saved, err := a.store.GetScopedConfig(ctx.Context(), cfg.AppID, cfg.Scope, cfg.ScopeID)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	a.herald.Audit(ctx.Context(), bridge.SeverityInfo, bridge.OutcomeSuccess, "config.set", "scoped_config", saved.ID.String(), "", saved.AppID, "config", map[string]string{
+		"scope": string(saved.Scope), "scope_id": saved.ScopeID,
 	})
-	return cfg, nil
+	return saved, nil
 }
 
 func (a *ForgeAPI) deleteOrgConfig(ctx forge.Context, req *DeleteOrgConfigRequest) (*scope.Config, error) {
@@ -1170,11 +1157,13 @@ func (a *ForgeAPI) deleteUserConfig(ctx forge.Context, req *DeleteUserConfigRequ
 	return nil, nil //nolint:nilnil // response already sent via ctx
 }
 
-// ─── Helpers ──────────────────────────────
-
-func mapError(err error) error {
-	if err == nil {
-		return nil
+func (a *ForgeAPI) encryptProviders(ctx forge.Context, req *EncryptProvidersRequest) (*herald.EncryptReport, error) {
+	rep, err := a.herald.EncryptStoredCredentials(ctx.Context(), req.AppID)
+	if err != nil {
+		return nil, mapError(err)
 	}
-	return forge.InternalError(err)
+	a.herald.Audit(ctx.Context(), bridge.SeverityWarning, bridge.OutcomeSuccess, "provider.encrypt_credentials", "provider", "", "", req.AppID, "provider", map[string]string{
+		"providers": strconv.Itoa(rep.Providers), "values_encrypted": strconv.Itoa(rep.ValuesEncrypted),
+	})
+	return &rep, nil
 }
