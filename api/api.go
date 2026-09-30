@@ -2,6 +2,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"time"
 
@@ -1050,6 +1051,9 @@ func (a *ForgeAPI) deleteInboxItem(ctx forge.Context, req *DeleteInboxRequest) (
 
 func (a *ForgeAPI) getPreferences(ctx forge.Context, req *GetPreferencesRequest) (*preference.Preference, error) {
 	pref, err := a.store.GetPreference(ctx.Context(), req.AppID, req.UserID)
+	if errors.Is(err, store.ErrPreferenceNotFound) {
+		return nil, nil //nolint:nilnil // no preference means defaults, answered as null
+	}
 	if err != nil {
 		return nil, mapError(err)
 	}

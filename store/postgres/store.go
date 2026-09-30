@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/xraph/grove"
@@ -80,7 +81,7 @@ func (s *Store) GetProvider(ctx context.Context, providerID id.ProviderID) (*pro
 		Scan(ctx)
 	if err != nil {
 		if isNoRows(err) {
-			return nil, fmt.Errorf("herald: provider not found")
+			return nil, store.ErrProviderNotFound
 		}
 		return nil, err
 	}
@@ -99,7 +100,7 @@ func (s *Store) UpdateProvider(ctx context.Context, p *provider.Provider) error 
 		return err
 	}
 	if rows == 0 {
-		return fmt.Errorf("herald: provider not found")
+		return store.ErrProviderNotFound
 	}
 	return nil
 }
@@ -116,7 +117,7 @@ func (s *Store) DeleteProvider(ctx context.Context, providerID id.ProviderID) er
 		return err
 	}
 	if rows == 0 {
-		return fmt.Errorf("herald: provider not found")
+		return store.ErrProviderNotFound
 	}
 	return nil
 }
@@ -165,6 +166,9 @@ func mapProviders(models []providerModel) ([]*provider.Provider, error) {
 func (s *Store) CreateTemplate(ctx context.Context, t *template.Template) error {
 	m := toTemplateModel(t)
 	_, err := s.pg.NewInsert(m).Exec(ctx)
+	if isUniqueViolation(err) {
+		return store.ErrDuplicateSlug
+	}
 	return err
 }
 
@@ -175,7 +179,7 @@ func (s *Store) GetTemplate(ctx context.Context, templateID id.TemplateID) (*tem
 		Scan(ctx)
 	if err != nil {
 		if isNoRows(err) {
-			return nil, fmt.Errorf("herald: template not found")
+			return nil, store.ErrTemplateNotFound
 		}
 		return nil, err
 	}
@@ -204,7 +208,7 @@ func (s *Store) GetTemplateBySlug(ctx context.Context, appID string, slug string
 		Scan(ctx)
 	if err != nil {
 		if isNoRows(err) {
-			return nil, fmt.Errorf("herald: template not found")
+			return nil, store.ErrTemplateNotFound
 		}
 		return nil, err
 	}
@@ -228,6 +232,9 @@ func (s *Store) UpdateTemplate(ctx context.Context, t *template.Template) error 
 	m := toTemplateModel(t)
 	m.UpdatedAt = time.Now().UTC()
 	res, err := s.pg.NewUpdate(m).WherePK().Exec(ctx)
+	if isUniqueViolation(err) {
+		return store.ErrDuplicateSlug
+	}
 	if err != nil {
 		return err
 	}
@@ -236,7 +243,7 @@ func (s *Store) UpdateTemplate(ctx context.Context, t *template.Template) error 
 		return err
 	}
 	if rows == 0 {
-		return fmt.Errorf("herald: template not found")
+		return store.ErrTemplateNotFound
 	}
 	return nil
 }
@@ -253,7 +260,7 @@ func (s *Store) DeleteTemplate(ctx context.Context, templateID id.TemplateID) er
 		return err
 	}
 	if rows == 0 {
-		return fmt.Errorf("herald: template not found")
+		return store.ErrTemplateNotFound
 	}
 	return nil
 }
@@ -300,6 +307,9 @@ func mapTemplates(models []templateModel) ([]*template.Template, error) {
 func (s *Store) CreateVersion(ctx context.Context, v *template.Version) error {
 	m := toVersionModel(v)
 	_, err := s.pg.NewInsert(m).Exec(ctx)
+	if isUniqueViolation(err) {
+		return store.ErrDuplicateLocale
+	}
 	return err
 }
 
@@ -310,7 +320,7 @@ func (s *Store) GetVersion(ctx context.Context, versionID id.TemplateVersionID) 
 		Scan(ctx)
 	if err != nil {
 		if isNoRows(err) {
-			return nil, fmt.Errorf("herald: template version not found")
+			return nil, store.ErrVersionNotFound
 		}
 		return nil, err
 	}
@@ -321,6 +331,9 @@ func (s *Store) UpdateVersion(ctx context.Context, v *template.Version) error {
 	m := toVersionModel(v)
 	m.UpdatedAt = time.Now().UTC()
 	res, err := s.pg.NewUpdate(m).WherePK().Exec(ctx)
+	if isUniqueViolation(err) {
+		return store.ErrDuplicateLocale
+	}
 	if err != nil {
 		return err
 	}
@@ -329,7 +342,7 @@ func (s *Store) UpdateVersion(ctx context.Context, v *template.Version) error {
 		return err
 	}
 	if rows == 0 {
-		return fmt.Errorf("herald: template version not found")
+		return store.ErrVersionNotFound
 	}
 	return nil
 }
@@ -346,7 +359,7 @@ func (s *Store) DeleteVersion(ctx context.Context, versionID id.TemplateVersionI
 		return err
 	}
 	if rows == 0 {
-		return fmt.Errorf("herald: template version not found")
+		return store.ErrVersionNotFound
 	}
 	return nil
 }
@@ -386,7 +399,7 @@ func (s *Store) GetMessage(ctx context.Context, messageID id.MessageID) (*messag
 		Scan(ctx)
 	if err != nil {
 		if isNoRows(err) {
-			return nil, fmt.Errorf("herald: message not found")
+			return nil, store.ErrMessageNotFound
 		}
 		return nil, err
 	}
@@ -407,7 +420,7 @@ func (s *Store) UpdateMessageStatus(ctx context.Context, messageID id.MessageID,
 		return err
 	}
 	if rows == 0 {
-		return fmt.Errorf("herald: message not found")
+		return store.ErrMessageNotFound
 	}
 	return nil
 }
@@ -463,7 +476,7 @@ func (s *Store) GetNotification(ctx context.Context, notifID id.InboxID) (*inbox
 		Scan(ctx)
 	if err != nil {
 		if isNoRows(err) {
-			return nil, fmt.Errorf("herald: notification not found")
+			return nil, store.ErrNotificationNotFound
 		}
 		return nil, err
 	}
@@ -482,7 +495,7 @@ func (s *Store) DeleteNotification(ctx context.Context, notifID id.InboxID) erro
 		return err
 	}
 	if rows == 0 {
-		return fmt.Errorf("herald: notification not found")
+		return store.ErrNotificationNotFound
 	}
 	return nil
 }
@@ -502,7 +515,7 @@ func (s *Store) MarkRead(ctx context.Context, notifID id.InboxID) error {
 		return err
 	}
 	if rows == 0 {
-		return fmt.Errorf("herald: notification not found")
+		return store.ErrNotificationNotFound
 	}
 	return nil
 }
@@ -567,7 +580,7 @@ func (s *Store) GetPreference(ctx context.Context, appID string, userID string) 
 		Scan(ctx)
 	if err != nil {
 		if isNoRows(err) {
-			return nil, nil // no preference = use defaults
+			return nil, store.ErrPreferenceNotFound
 		}
 		return nil, err
 	}
@@ -603,7 +616,7 @@ func (s *Store) GetScopedConfig(ctx context.Context, appID string, scopeType sco
 		Scan(ctx)
 	if err != nil {
 		if isNoRows(err) {
-			return nil, nil // no config = use parent scope
+			return nil, store.ErrScopedConfigNotFound
 		}
 		return nil, err
 	}
@@ -638,7 +651,7 @@ func (s *Store) DeleteScopedConfig(ctx context.Context, configID id.ScopedConfig
 		return err
 	}
 	if rows == 0 {
-		return fmt.Errorf("herald: scoped config not found")
+		return store.ErrScopedConfigNotFound
 	}
 	return nil
 }
@@ -666,4 +679,11 @@ func (s *Store) ListScopedConfigs(ctx context.Context, appID string) ([]*scope.C
 // isNoRows checks for the standard sql.ErrNoRows sentinel.
 func isNoRows(err error) bool {
 	return errors.Is(err, sql.ErrNoRows)
+}
+
+// isUniqueViolation reports a Postgres unique_violation. pgx formats its
+// errors as "... (SQLSTATE 23505)"; matching the code in the text keeps
+// pgconn out of herald's direct dependencies.
+func isUniqueViolation(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "SQLSTATE 23505")
 }

@@ -142,7 +142,7 @@ func (s *Store) GetProvider(ctx context.Context, providerID id.ProviderID) (*pro
 		Scan(ctx)
 	if err != nil {
 		if isNoDocuments(err) {
-			return nil, fmt.Errorf("herald: provider not found")
+			return nil, store.ErrProviderNotFound
 		}
 		return nil, fmt.Errorf("herald/mongo: get provider: %w", err)
 	}
@@ -159,7 +159,7 @@ func (s *Store) UpdateProvider(ctx context.Context, p *provider.Provider) error 
 		return fmt.Errorf("herald/mongo: update provider: %w", err)
 	}
 	if res.MatchedCount() == 0 {
-		return fmt.Errorf("herald: provider not found")
+		return store.ErrProviderNotFound
 	}
 	return nil
 }
@@ -172,7 +172,7 @@ func (s *Store) DeleteProvider(ctx context.Context, providerID id.ProviderID) er
 		return fmt.Errorf("herald/mongo: delete provider: %w", err)
 	}
 	if res.DeletedCount() == 0 {
-		return fmt.Errorf("herald: provider not found")
+		return store.ErrProviderNotFound
 	}
 	return nil
 }
@@ -223,6 +223,9 @@ func mapProviders(models []providerModel) ([]*provider.Provider, error) {
 func (s *Store) CreateTemplate(ctx context.Context, t *template.Template) error {
 	m := toTemplateModel(t)
 	_, err := s.mdb.NewInsert(m).Exec(ctx)
+	if mongo.IsDuplicateKeyError(err) {
+		return store.ErrDuplicateSlug
+	}
 	if err != nil {
 		return fmt.Errorf("herald/mongo: create template: %w", err)
 	}
@@ -236,7 +239,7 @@ func (s *Store) GetTemplate(ctx context.Context, templateID id.TemplateID) (*tem
 		Scan(ctx)
 	if err != nil {
 		if isNoDocuments(err) {
-			return nil, fmt.Errorf("herald: template not found")
+			return nil, store.ErrTemplateNotFound
 		}
 		return nil, fmt.Errorf("herald/mongo: get template: %w", err)
 	}
@@ -263,7 +266,7 @@ func (s *Store) GetTemplateBySlug(ctx context.Context, appID string, slug string
 		Scan(ctx)
 	if err != nil {
 		if isNoDocuments(err) {
-			return nil, fmt.Errorf("herald: template not found")
+			return nil, store.ErrTemplateNotFound
 		}
 		return nil, fmt.Errorf("herald/mongo: get template by slug: %w", err)
 	}
@@ -289,11 +292,14 @@ func (s *Store) UpdateTemplate(ctx context.Context, t *template.Template) error 
 	res, err := s.mdb.NewUpdate(m).
 		Filter(bson.M{"_id": m.ID}).
 		Exec(ctx)
+	if mongo.IsDuplicateKeyError(err) {
+		return store.ErrDuplicateSlug
+	}
 	if err != nil {
 		return fmt.Errorf("herald/mongo: update template: %w", err)
 	}
 	if res.MatchedCount() == 0 {
-		return fmt.Errorf("herald: template not found")
+		return store.ErrTemplateNotFound
 	}
 	return nil
 }
@@ -312,7 +318,7 @@ func (s *Store) DeleteTemplate(ctx context.Context, templateID id.TemplateID) er
 		return fmt.Errorf("herald/mongo: delete template: %w", err)
 	}
 	if res.DeletedCount() == 0 {
-		return fmt.Errorf("herald: template not found")
+		return store.ErrTemplateNotFound
 	}
 	return nil
 }
@@ -358,6 +364,9 @@ func mapTemplates(models []templateModel) ([]*template.Template, error) {
 func (s *Store) CreateVersion(ctx context.Context, v *template.Version) error {
 	m := toVersionModel(v)
 	_, err := s.mdb.NewInsert(m).Exec(ctx)
+	if mongo.IsDuplicateKeyError(err) {
+		return store.ErrDuplicateLocale
+	}
 	if err != nil {
 		return fmt.Errorf("herald/mongo: create version: %w", err)
 	}
@@ -371,7 +380,7 @@ func (s *Store) GetVersion(ctx context.Context, versionID id.TemplateVersionID) 
 		Scan(ctx)
 	if err != nil {
 		if isNoDocuments(err) {
-			return nil, fmt.Errorf("herald: template version not found")
+			return nil, store.ErrVersionNotFound
 		}
 		return nil, fmt.Errorf("herald/mongo: get version: %w", err)
 	}
@@ -384,11 +393,14 @@ func (s *Store) UpdateVersion(ctx context.Context, v *template.Version) error {
 	res, err := s.mdb.NewUpdate(m).
 		Filter(bson.M{"_id": m.ID}).
 		Exec(ctx)
+	if mongo.IsDuplicateKeyError(err) {
+		return store.ErrDuplicateLocale
+	}
 	if err != nil {
 		return fmt.Errorf("herald/mongo: update version: %w", err)
 	}
 	if res.MatchedCount() == 0 {
-		return fmt.Errorf("herald: template version not found")
+		return store.ErrVersionNotFound
 	}
 	return nil
 }
@@ -401,7 +413,7 @@ func (s *Store) DeleteVersion(ctx context.Context, versionID id.TemplateVersionI
 		return fmt.Errorf("herald/mongo: delete version: %w", err)
 	}
 	if res.DeletedCount() == 0 {
-		return fmt.Errorf("herald: template version not found")
+		return store.ErrVersionNotFound
 	}
 	return nil
 }
@@ -444,7 +456,7 @@ func (s *Store) GetMessage(ctx context.Context, messageID id.MessageID) (*messag
 		Scan(ctx)
 	if err != nil {
 		if isNoDocuments(err) {
-			return nil, fmt.Errorf("herald: message not found")
+			return nil, store.ErrMessageNotFound
 		}
 		return nil, fmt.Errorf("herald/mongo: get message: %w", err)
 	}
@@ -461,7 +473,7 @@ func (s *Store) UpdateMessageStatus(ctx context.Context, messageID id.MessageID,
 		return fmt.Errorf("herald/mongo: update message status: %w", err)
 	}
 	if res.MatchedCount() == 0 {
-		return fmt.Errorf("herald: message not found")
+		return store.ErrMessageNotFound
 	}
 	return nil
 }
@@ -520,7 +532,7 @@ func (s *Store) GetNotification(ctx context.Context, notifID id.InboxID) (*inbox
 		Scan(ctx)
 	if err != nil {
 		if isNoDocuments(err) {
-			return nil, fmt.Errorf("herald: notification not found")
+			return nil, store.ErrNotificationNotFound
 		}
 		return nil, fmt.Errorf("herald/mongo: get notification: %w", err)
 	}
@@ -535,7 +547,7 @@ func (s *Store) DeleteNotification(ctx context.Context, notifID id.InboxID) erro
 		return fmt.Errorf("herald/mongo: delete notification: %w", err)
 	}
 	if res.DeletedCount() == 0 {
-		return fmt.Errorf("herald: notification not found")
+		return store.ErrNotificationNotFound
 	}
 	return nil
 }
@@ -551,7 +563,7 @@ func (s *Store) MarkRead(ctx context.Context, notifID id.InboxID) error {
 		return fmt.Errorf("herald/mongo: mark read: %w", err)
 	}
 	if res.MatchedCount() == 0 {
-		return fmt.Errorf("herald: notification not found")
+		return store.ErrNotificationNotFound
 	}
 	return nil
 }
@@ -618,7 +630,7 @@ func (s *Store) GetPreference(ctx context.Context, appID string, userID string) 
 		Scan(ctx)
 	if err != nil {
 		if isNoDocuments(err) {
-			return nil, nil // no preference = use defaults
+			return nil, store.ErrPreferenceNotFound
 		}
 		return nil, fmt.Errorf("herald/mongo: get preference: %w", err)
 	}
@@ -665,7 +677,7 @@ func (s *Store) GetScopedConfig(ctx context.Context, appID string, scopeType sco
 		Scan(ctx)
 	if err != nil {
 		if isNoDocuments(err) {
-			return nil, nil // no config = use parent scope
+			return nil, store.ErrScopedConfigNotFound
 		}
 		return nil, fmt.Errorf("herald/mongo: get scoped config: %w", err)
 	}
@@ -710,7 +722,7 @@ func (s *Store) DeleteScopedConfig(ctx context.Context, configID id.ScopedConfig
 		return fmt.Errorf("herald/mongo: delete scoped config: %w", err)
 	}
 	if res.DeletedCount() == 0 {
-		return fmt.Errorf("herald: scoped config not found")
+		return store.ErrScopedConfigNotFound
 	}
 	return nil
 }

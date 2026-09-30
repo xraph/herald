@@ -61,7 +61,7 @@ func (s *Store) GetProvider(_ context.Context, providerID id.ProviderID) (*provi
 	defer s.mu.RUnlock()
 	p, ok := s.providers[providerID.String()]
 	if !ok {
-		return nil, errNotFound("provider")
+		return nil, store.ErrProviderNotFound
 	}
 	return p, nil
 }
@@ -69,6 +69,9 @@ func (s *Store) GetProvider(_ context.Context, providerID id.ProviderID) (*provi
 func (s *Store) UpdateProvider(_ context.Context, p *provider.Provider) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, ok := s.providers[p.ID.String()]; !ok {
+		return store.ErrProviderNotFound
+	}
 	s.providers[p.ID.String()] = p
 	return nil
 }
@@ -76,6 +79,9 @@ func (s *Store) UpdateProvider(_ context.Context, p *provider.Provider) error {
 func (s *Store) DeleteProvider(_ context.Context, providerID id.ProviderID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, ok := s.providers[providerID.String()]; !ok {
+		return store.ErrProviderNotFound
+	}
 	delete(s.providers, providerID.String())
 	return nil
 }
@@ -101,6 +107,9 @@ func (s *Store) ListAllProviders(_ context.Context, appID string) ([]*provider.P
 func (s *Store) CreateTemplate(_ context.Context, t *template.Template) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.slugTaken(t) {
+		return store.ErrDuplicateSlug
+	}
 	s.templates[t.ID.String()] = t
 	return nil
 }
@@ -110,7 +119,7 @@ func (s *Store) GetTemplate(_ context.Context, templateID id.TemplateID) (*templ
 	defer s.mu.RUnlock()
 	t, ok := s.templates[templateID.String()]
 	if !ok {
-		return nil, errNotFound("template")
+		return nil, store.ErrTemplateNotFound
 	}
 	// Attach versions
 	t.Versions = s.versionsForTemplate(templateID)
@@ -126,12 +135,18 @@ func (s *Store) GetTemplateBySlug(_ context.Context, appID, slug, channel string
 			return t, nil
 		}
 	}
-	return nil, errNotFound("template")
+	return nil, store.ErrTemplateNotFound
 }
 
 func (s *Store) UpdateTemplate(_ context.Context, t *template.Template) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, ok := s.templates[t.ID.String()]; !ok {
+		return store.ErrTemplateNotFound
+	}
+	if s.slugTaken(t) {
+		return store.ErrDuplicateSlug
+	}
 	s.templates[t.ID.String()] = t
 	return nil
 }
@@ -139,14 +154,27 @@ func (s *Store) UpdateTemplate(_ context.Context, t *template.Template) error {
 func (s *Store) DeleteTemplate(_ context.Context, templateID id.TemplateID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, ok := s.templates[templateID.String()]; !ok {
+		return store.ErrTemplateNotFound
+	}
 	delete(s.templates, templateID.String())
-	// Delete associated versions
 	for k, v := range s.versions {
-		if v.TemplateID == templateID {
+		if v.TemplateID.String() == templateID.String() {
 			delete(s.versions, k)
 		}
 	}
 	return nil
+}
+
+// slugTaken reports whether another template already holds t's (app, slug,
+// channel), the key SQL and Mongo enforce with a unique index.
+func (s *Store) slugTaken(t *template.Template) bool {
+	for _, o := range s.templates {
+		if o.ID.String() != t.ID.String() && o.AppID == t.AppID && o.Slug == t.Slug && o.Channel == t.Channel {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Store) ListTemplates(_ context.Context, appID string) ([]*template.Template, error) {
@@ -190,6 +218,9 @@ func (s *Store) versionsForTemplate(templateID id.TemplateID) []template.Version
 func (s *Store) CreateVersion(_ context.Context, v *template.Version) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.localeTaken(v) {
+		return store.ErrDuplicateLocale
+	}
 	s.versions[v.ID.String()] = v
 	return nil
 }
@@ -199,7 +230,7 @@ func (s *Store) GetVersion(_ context.Context, versionID id.TemplateVersionID) (*
 	defer s.mu.RUnlock()
 	v, ok := s.versions[versionID.String()]
 	if !ok {
-		return nil, errNotFound("template version")
+		return nil, store.ErrVersionNotFound
 	}
 	return v, nil
 }
@@ -207,6 +238,12 @@ func (s *Store) GetVersion(_ context.Context, versionID id.TemplateVersionID) (*
 func (s *Store) UpdateVersion(_ context.Context, v *template.Version) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, ok := s.versions[v.ID.String()]; !ok {
+		return store.ErrVersionNotFound
+	}
+	if s.localeTaken(v) {
+		return store.ErrDuplicateLocale
+	}
 	s.versions[v.ID.String()] = v
 	return nil
 }
@@ -214,8 +251,22 @@ func (s *Store) UpdateVersion(_ context.Context, v *template.Version) error {
 func (s *Store) DeleteVersion(_ context.Context, versionID id.TemplateVersionID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, ok := s.versions[versionID.String()]; !ok {
+		return store.ErrVersionNotFound
+	}
 	delete(s.versions, versionID.String())
 	return nil
+}
+
+// localeTaken reports whether another version of the same template already
+// holds v's locale.
+func (s *Store) localeTaken(v *template.Version) bool {
+	for _, o := range s.versions {
+		if o.ID.String() != v.ID.String() && o.TemplateID.String() == v.TemplateID.String() && o.Locale == v.Locale {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Store) ListVersions(_ context.Context, templateID id.TemplateID) ([]*template.Version, error) {
@@ -244,7 +295,7 @@ func (s *Store) GetMessage(_ context.Context, messageID id.MessageID) (*message.
 	defer s.mu.RUnlock()
 	m, ok := s.messages[messageID.String()]
 	if !ok {
-		return nil, errNotFound("message")
+		return nil, store.ErrMessageNotFound
 	}
 	return m, nil
 }
@@ -254,7 +305,7 @@ func (s *Store) UpdateMessageStatus(_ context.Context, messageID id.MessageID, s
 	defer s.mu.Unlock()
 	m, ok := s.messages[messageID.String()]
 	if !ok {
-		return errNotFound("message")
+		return store.ErrMessageNotFound
 	}
 	m.Status = status
 	m.Error = errMsg
@@ -307,7 +358,7 @@ func (s *Store) GetNotification(_ context.Context, notifID id.InboxID) (*inbox.N
 	defer s.mu.RUnlock()
 	n, ok := s.notifications[notifID.String()]
 	if !ok {
-		return nil, errNotFound("notification")
+		return nil, store.ErrNotificationNotFound
 	}
 	return n, nil
 }
@@ -315,6 +366,9 @@ func (s *Store) GetNotification(_ context.Context, notifID id.InboxID) (*inbox.N
 func (s *Store) DeleteNotification(_ context.Context, notifID id.InboxID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, ok := s.notifications[notifID.String()]; !ok {
+		return store.ErrNotificationNotFound
+	}
 	delete(s.notifications, notifID.String())
 	return nil
 }
@@ -324,7 +378,7 @@ func (s *Store) MarkRead(_ context.Context, notifID id.InboxID) error {
 	defer s.mu.Unlock()
 	n, ok := s.notifications[notifID.String()]
 	if !ok {
-		return errNotFound("notification")
+		return store.ErrNotificationNotFound
 	}
 	n.Read = true
 	now := time.Now().UTC()
@@ -384,7 +438,7 @@ func (s *Store) GetPreference(_ context.Context, appID, userID string) (*prefere
 	defer s.mu.RUnlock()
 	p, ok := s.preferences[appID+":"+userID]
 	if !ok {
-		return nil, errNotFound("preference")
+		return nil, store.ErrPreferenceNotFound
 	}
 	return p, nil
 }
@@ -411,7 +465,7 @@ func (s *Store) GetScopedConfig(_ context.Context, appID string, scopeType scope
 	key := appID + ":" + string(scopeType) + ":" + scopeID
 	cfg, ok := s.scopedConfigs[key]
 	if !ok {
-		return nil, errNotFound("scoped config")
+		return nil, store.ErrScopedConfigNotFound
 	}
 	return cfg, nil
 }
@@ -428,12 +482,12 @@ func (s *Store) DeleteScopedConfig(_ context.Context, configID id.ScopedConfigID
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for k, v := range s.scopedConfigs {
-		if v.ID == configID {
+		if v.ID.String() == configID.String() {
 			delete(s.scopedConfigs, k)
 			return nil
 		}
 	}
-	return nil
+	return store.ErrScopedConfigNotFound
 }
 
 func (s *Store) ListScopedConfigs(_ context.Context, appID string) ([]*scope.Config, error) {
@@ -447,11 +501,3 @@ func (s *Store) ListScopedConfigs(_ context.Context, appID string) ([]*scope.Con
 	}
 	return result, nil
 }
-
-// ─── Helpers ──────────────────────────────
-
-type notFoundError string
-
-func (e notFoundError) Error() string { return "herald: " + string(e) + " not found" }
-
-func errNotFound(entity string) error { return notFoundError(entity) }

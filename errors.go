@@ -1,6 +1,10 @@
 package herald
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/xraph/herald/store"
+)
 
 // Sentinel errors returned by Herald operations.
 var (
@@ -8,7 +12,7 @@ var (
 	ErrNoStore = errors.New("herald: store is required")
 
 	// ErrProviderNotFound is returned when a provider cannot be found.
-	ErrProviderNotFound = errors.New("herald: provider not found")
+	ErrProviderNotFound = store.ErrProviderNotFound
 
 	// ErrProviderDisabled is returned when the resolved provider is disabled.
 	ErrProviderDisabled = errors.New("herald: provider is disabled")
@@ -20,7 +24,10 @@ var (
 	ErrDriverNotFound = errors.New("herald: driver not found")
 
 	// ErrTemplateNotFound is returned when a template cannot be found.
-	ErrTemplateNotFound = errors.New("herald: template not found")
+	ErrTemplateNotFound = store.ErrTemplateNotFound
+
+	// ErrVersionNotFound is returned when a template version cannot be found.
+	ErrVersionNotFound = store.ErrVersionNotFound
 
 	// ErrTemplateDisabled is returned when the resolved template is disabled.
 	ErrTemplateDisabled = errors.New("herald: template is disabled")
@@ -35,16 +42,16 @@ var (
 	ErrMissingRequiredVariable = errors.New("herald: missing required template variable")
 
 	// ErrMessageNotFound is returned when a message cannot be found.
-	ErrMessageNotFound = errors.New("herald: message not found")
+	ErrMessageNotFound = store.ErrMessageNotFound
 
 	// ErrInboxNotFound is returned when an in-app notification cannot be found.
-	ErrInboxNotFound = errors.New("herald: in-app notification not found")
+	ErrInboxNotFound = store.ErrNotificationNotFound
 
 	// ErrPreferenceNotFound is returned when user preferences cannot be found.
-	ErrPreferenceNotFound = errors.New("herald: user preference not found")
+	ErrPreferenceNotFound = store.ErrPreferenceNotFound
 
 	// ErrScopedConfigNotFound is returned when no scoped config is found.
-	ErrScopedConfigNotFound = errors.New("herald: scoped config not found")
+	ErrScopedConfigNotFound = store.ErrScopedConfigNotFound
 
 	// ErrInvalidChannel is returned when an unsupported channel type is specified.
 	ErrInvalidChannel = errors.New("herald: invalid channel type")
@@ -62,8 +69,8 @@ var (
 	ErrMigrationFailed = errors.New("herald: migration failed")
 
 	// ErrDuplicateSlug is returned when a template slug+channel+app combination already exists.
-	ErrDuplicateSlug = errors.New("herald: duplicate template slug")
+	ErrDuplicateSlug = store.ErrDuplicateSlug
 
 	// ErrDuplicateLocale is returned when a template version for the same locale already exists.
-	ErrDuplicateLocale = errors.New("herald: duplicate locale version")
+	ErrDuplicateLocale = store.ErrDuplicateLocale
 )
