@@ -96,23 +96,32 @@ func TestPreviousKeysDecryptOnly(t *testing.T) {
 func TestTamperedPayloadIsRefused(t *testing.T) {
 	c, _ := NewCipher(key("k1", 1))
 	enc, _ := c.Encrypt("p", "k", "secret")
-	i := len(enc) - 2
-	flipped := enc[:i] + string(rune(enc[i]^1)) + enc[i+1:]
-	if _, err := c.Decrypt("p", "k", flipped); err == nil {
-		t.Error("a tampered value decrypted")
+
+	// Flip a byte in the actual ciphertext, not the base64 encoding
+	sealed, _ := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(strings.TrimPrefix(enc, "enc:v1:k1:"), ""))
+	if len(sealed) > 16 {
+		sealed[16] ^= 1 // flip a byte after the nonce (in the ciphertext/tag)
 	}
+	flipped := "enc:v1:k1:" + base64.RawURLEncoding.EncodeToString(sealed)
+	if _, err := c.Decrypt("p", "k", flipped); !errors.Is(err, ErrMalformed) {
+		t.Errorf("tampered value decrypted or wrong error: %v", err)
+	}
+
 	for _, bad := range []string{"enc:v1:", "enc:v1:k1", "enc:v1::abc", "enc:v1:k1:!!!"} {
-		if _, err := c.Decrypt("p", "k", bad); err == nil {
-			t.Errorf("Decrypt(%q) succeeded", bad)
+		if _, err := c.Decrypt("p", "k", bad); !errors.Is(err, ErrMalformed) {
+			t.Errorf("Decrypt(%q) should return ErrMalformed, got %v", bad, err)
 		}
 	}
 }
 
 func TestKeyValidation(t *testing.T) {
 	for name, k := range map[string]Key{
-		"short":    {ID: "k1", Bytes: make([]byte, 16)},
-		"empty id": {ID: "", Bytes: make([]byte, KeySize)},
-		"colon id": {ID: "k:1", Bytes: make([]byte, KeySize)},
+		"short":       {ID: "k1", Bytes: make([]byte, 16)},
+		"empty id":    {ID: "", Bytes: make([]byte, KeySize)},
+		"colon id":    {ID: "k:1", Bytes: make([]byte, KeySize)},
+		"has space":   {ID: "k 1", Bytes: make([]byte, KeySize)},
+		"has newline": {ID: "k\n1", Bytes: make([]byte, KeySize)},
+		"65 chars":    {ID: strings.Repeat("a", 65), Bytes: make([]byte, KeySize)},
 	} {
 		if _, err := NewCipher(k); err == nil {
 			t.Errorf("%s: NewCipher accepted it", name)
@@ -126,5 +135,61 @@ func TestKeyValidation(t *testing.T) {
 	}
 	if b, err := ParseKey(base64.StdEncoding.EncodeToString(make([]byte, KeySize))); err != nil || len(b) != KeySize {
 		t.Errorf("ParseKey(valid) = %d bytes, %v", len(b), err)
+	}
+}
+
+func TestZeroCipherPanicsInEncrypt(t *testing.T) {
+	var c *Cipher
+	_, err := c.Encrypt("p", "k", "plaintext")
+	if !errors.Is(err, ErrKeyUnavailable) {
+		t.Errorf("nil Cipher.Encrypt: got %v, want ErrKeyUnavailable", err)
+	}
+
+	empty := &Cipher{}
+	_, err = empty.Encrypt("p", "k", "plaintext")
+	if !errors.Is(err, ErrKeyUnavailable) {
+		t.Errorf("zero-value Cipher.Encrypt: got %v, want ErrKeyUnavailable", err)
+	}
+}
+
+func TestMalformedKeyIDIsRefused(t *testing.T) {
+	c, _ := NewCipher(key("k1", 1))
+
+	malformed := "enc:v1:bad id:xxxx"
+	_, err := c.Decrypt("p", "k", malformed)
+	if !errors.Is(err, ErrMalformed) {
+		t.Errorf("Decrypt(%q): got %v, want ErrMalformed", malformed, err)
+	}
+	if strings.Contains(err.Error(), "bad id") {
+		t.Errorf("error message leaked key ID: %v", err)
+	}
+
+	p, kid := Describe(malformed)
+	if p != ProtectionAESGCM || kid != "" {
+		t.Errorf("Describe(%q) = %q, %q; want ProtectionAESGCM, empty", malformed, p, kid)
+	}
+}
+
+func TestNoCredentialLeaksInErrors(t *testing.T) {
+	plaintext := "sk_live_canary"
+	c, _ := NewCipher(key("k1", 1))
+	enc, _ := c.Encrypt("p", "k", plaintext)
+
+	// Test that encrypted value doesn't leak plaintext
+	if strings.Contains(enc, "canary") {
+		t.Error("plaintext leaked in ciphertext")
+	}
+
+	// Test that errors don't leak plaintext
+	_, err := c.Decrypt("p", "k", "enc:v1:unknown_key:abc123")
+	if err != nil && strings.Contains(err.Error(), plaintext) {
+		t.Errorf("plaintext leaked in error: %v", err)
+	}
+
+	// Test that NewCipher errors don't leak key bytes
+	k := key("k1", 5)
+	_, err = NewCipher(k, k) // duplicate key ID
+	if err != nil && strings.Contains(err.Error(), string(k.Bytes)) {
+		t.Errorf("key bytes leaked in error: %v", err)
 	}
 }

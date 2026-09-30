@@ -18,6 +18,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -38,6 +39,7 @@ var (
 	ErrKeyUnavailable = errors.New("credential key is not configured")
 	// ErrMalformed means a value has the encrypted prefix but can't be read.
 	ErrMalformed = errors.New("credential value is malformed")
+	keyIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 )
 
 // Key is one AES-256 key and the ID stored beside every value it encrypts.
@@ -58,8 +60,8 @@ type Cipher struct {
 func NewCipher(primary Key, previous ...Key) (*Cipher, error) {
 	c := &Cipher{primary: primary.ID, aeads: map[string]cipher.AEAD{}}
 	for _, k := range append([]Key{primary}, previous...) {
-		if k.ID == "" || strings.Contains(k.ID, ":") {
-			return nil, fmt.Errorf("credential: key ID %q must be non-empty and contain no colon", k.ID)
+		if !keyIDPattern.MatchString(k.ID) {
+			return nil, fmt.Errorf("credential: key ID must match [A-Za-z0-9._-]{1,64}")
 		}
 		if len(k.Bytes) != KeySize {
 			return nil, fmt.Errorf("credential: key %q is %d bytes, want %d", k.ID, len(k.Bytes), KeySize)
@@ -92,6 +94,20 @@ func ParseKey(encoded string) ([]byte, error) {
 	return b, nil
 }
 
+// parse validates an encrypted value format and extracts keyID and payload.
+// It returns ok=false if the value doesn't have the correct structure.
+func parse(value string) (keyID, payload string, ok bool) {
+	s := strings.TrimPrefix(value, prefix)
+	if s == value {
+		return "", "", false // doesn't have prefix
+	}
+	keyID, payload, cut := strings.Cut(s, ":")
+	if !cut || !keyIDPattern.MatchString(keyID) || payload == "" {
+		return "", "", false
+	}
+	return keyID, payload, true
+}
+
 // KeyID is the ID of the key new values are encrypted under, or "" for a nil
 // Cipher.
 func (c *Cipher) KeyID() string {
@@ -106,7 +122,10 @@ func (c *Cipher) Encrypt(providerID, name, plaintext string) (string, error) {
 	if c == nil {
 		return "", ErrKeyUnavailable
 	}
-	aead := c.aeads[c.primary]
+	aead, ok := c.aeads[c.primary]
+	if !ok {
+		return "", ErrKeyUnavailable
+	}
 	nonce := make([]byte, aead.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
 		return "", fmt.Errorf("credential: nonce: %w", err)
@@ -121,16 +140,16 @@ func (c *Cipher) Decrypt(providerID, name, value string) (string, error) {
 	if !IsEncrypted(value) {
 		return value, nil
 	}
-	keyID, payload, ok := strings.Cut(strings.TrimPrefix(value, prefix), ":")
-	if !ok || keyID == "" {
+	keyID, payload, ok := parse(value)
+	if !ok {
 		return "", ErrMalformed
 	}
 	if c == nil {
-		return "", fmt.Errorf("%w: %s", ErrKeyUnavailable, keyID)
+		return "", fmt.Errorf("%w: %q", ErrKeyUnavailable, keyID)
 	}
 	aead, ok := c.aeads[keyID]
 	if !ok {
-		return "", fmt.Errorf("%w: %s", ErrKeyUnavailable, keyID)
+		return "", fmt.Errorf("%w: %q", ErrKeyUnavailable, keyID)
 	}
 	sealed, err := base64.RawURLEncoding.DecodeString(payload)
 	if err != nil || len(sealed) < aead.NonceSize() {
@@ -152,7 +171,10 @@ func Describe(value string) (protection, keyID string) {
 	if !IsEncrypted(value) {
 		return ProtectionPlaintext, ""
 	}
-	keyID, _, _ = strings.Cut(strings.TrimPrefix(value, prefix), ":")
+	keyID, _, ok := parse(value)
+	if !ok {
+		return ProtectionAESGCM, ""
+	}
 	return ProtectionAESGCM, keyID
 }
 
