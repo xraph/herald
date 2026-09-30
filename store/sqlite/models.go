@@ -199,45 +199,47 @@ func fromVersionModel(m *templateVersionModel) (*template.Version, error) {
 type messageModel struct {
 	grove.BaseModel `grove:"table:herald_messages"`
 
-	ID          string     `grove:"id,pk"`
-	AppID       string     `grove:"app_id"`
-	EnvID       string     `grove:"env_id"`
-	TemplateID  string     `grove:"template_id"`
-	ProviderID  string     `grove:"provider_id"`
-	Channel     string     `grove:"channel"`
-	Recipient   string     `grove:"recipient"`
-	Subject     string     `grove:"subject"`
-	Body        string     `grove:"body"`
-	Status      string     `grove:"status"`
-	Error       string     `grove:"error"`
-	Metadata    string     `grove:"metadata"` // JSON text
-	Async       bool       `grove:"async"`
-	Attempts    int        `grove:"attempts"`
-	SentAt      *time.Time `grove:"sent_at"`
-	DeliveredAt *time.Time `grove:"delivered_at"`
-	CreatedAt   time.Time  `grove:"created_at"`
+	ID                string     `grove:"id,pk"`
+	AppID             string     `grove:"app_id"`
+	EnvID             string     `grove:"env_id"`
+	TemplateID        string     `grove:"template_id"`
+	ProviderID        string     `grove:"provider_id"`
+	ProviderMessageID string     `grove:"provider_message_id"`
+	Channel           string     `grove:"channel"`
+	Recipient         string     `grove:"recipient"`
+	Subject           string     `grove:"subject"`
+	Body              string     `grove:"body"`
+	Status            string     `grove:"status"`
+	Error             string     `grove:"error"`
+	Metadata          string     `grove:"metadata"` // JSON text
+	Async             bool       `grove:"async"`
+	Attempts          int        `grove:"attempts"`
+	SentAt            *time.Time `grove:"sent_at"`
+	DeliveredAt       *time.Time `grove:"delivered_at"`
+	CreatedAt         time.Time  `grove:"created_at"`
 }
 
 func toMessageModel(m *message.Message) *messageModel {
 	metadata, _ := json.Marshal(m.Metadata) //nolint:errcheck // best-effort
 	return &messageModel{
-		ID:          m.ID.String(),
-		AppID:       m.AppID,
-		EnvID:       m.EnvID,
-		TemplateID:  m.TemplateID,
-		ProviderID:  m.ProviderID,
-		Channel:     m.Channel,
-		Recipient:   m.Recipient,
-		Subject:     m.Subject,
-		Body:        m.Body,
-		Status:      string(m.Status),
-		Error:       m.Error,
-		Metadata:    string(metadata),
-		Async:       m.Async,
-		Attempts:    m.Attempts,
-		SentAt:      m.SentAt,
-		DeliveredAt: m.DeliveredAt,
-		CreatedAt:   m.CreatedAt,
+		ID:                m.ID.String(),
+		AppID:             m.AppID,
+		EnvID:             m.EnvID,
+		TemplateID:        m.TemplateID,
+		ProviderID:        m.ProviderID,
+		ProviderMessageID: m.ProviderMessageID,
+		Channel:           m.Channel,
+		Recipient:         m.Recipient,
+		Subject:           m.Subject,
+		Body:              m.Body,
+		Status:            string(m.Status),
+		Error:             m.Error,
+		Metadata:          string(metadata),
+		Async:             m.Async,
+		Attempts:          m.Attempts,
+		SentAt:            m.SentAt,
+		DeliveredAt:       m.DeliveredAt,
+		CreatedAt:         m.CreatedAt,
 	}
 }
 
@@ -251,23 +253,24 @@ func fromMessageModel(m *messageModel) (*message.Message, error) {
 		_ = json.Unmarshal([]byte(m.Metadata), &metadata) //nolint:errcheck // best-effort
 	}
 	return &message.Message{
-		ID:          mid,
-		AppID:       m.AppID,
-		EnvID:       m.EnvID,
-		TemplateID:  m.TemplateID,
-		ProviderID:  m.ProviderID,
-		Channel:     m.Channel,
-		Recipient:   m.Recipient,
-		Subject:     m.Subject,
-		Body:        m.Body,
-		Status:      message.Status(m.Status),
-		Error:       m.Error,
-		Metadata:    metadata,
-		Async:       m.Async,
-		Attempts:    m.Attempts,
-		SentAt:      m.SentAt,
-		DeliveredAt: m.DeliveredAt,
-		CreatedAt:   m.CreatedAt,
+		ID:                mid,
+		AppID:             m.AppID,
+		EnvID:             m.EnvID,
+		TemplateID:        m.TemplateID,
+		ProviderID:        m.ProviderID,
+		ProviderMessageID: m.ProviderMessageID,
+		Channel:           m.Channel,
+		Recipient:         m.Recipient,
+		Subject:           m.Subject,
+		Body:              m.Body,
+		Status:            message.Status(m.Status),
+		Error:             m.Error,
+		Metadata:          metadata,
+		Async:             m.Async,
+		Attempts:          m.Attempts,
+		SentAt:            m.SentAt,
+		DeliveredAt:       m.DeliveredAt,
+		CreatedAt:         m.CreatedAt,
 	}, nil
 }
 

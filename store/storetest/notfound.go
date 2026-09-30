@@ -29,7 +29,7 @@ func testNotFound(t *testing.T, s store.Store) {
 
 	_, err = s.GetMessage(ctx, id.NewMessageID())
 	expectIs(t, "GetMessage", err, store.ErrMessageNotFound)
-	expectIs(t, "UpdateMessageStatus", s.UpdateMessageStatus(ctx, id.NewMessageID(), message.StatusSent, ""), store.ErrMessageNotFound)
+	expectIs(t, "RecordDelivery", s.RecordDelivery(ctx, id.NewMessageID(), message.Delivery{Status: message.StatusSent}), store.ErrMessageNotFound)
 
 	_, err = s.GetNotification(ctx, id.NewInboxID())
 	expectIs(t, "GetNotification", err, store.ErrNotificationNotFound)

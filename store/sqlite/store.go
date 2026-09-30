@@ -412,10 +412,12 @@ func (s *Store) GetMessage(ctx context.Context, messageID id.MessageID) (*messag
 	return fromMessageModel(m)
 }
 
-func (s *Store) UpdateMessageStatus(ctx context.Context, messageID id.MessageID, status message.Status, errMsg string) error {
+func (s *Store) RecordDelivery(ctx context.Context, messageID id.MessageID, d message.Delivery) error {
 	res, err := s.sdb.NewUpdate((*messageModel)(nil)).
-		Set("status = ?", string(status)).
-		Set("error = ?", errMsg).
+		Set("status = ?", string(d.Status)).
+		Set("error = ?", d.Error).
+		Set("provider_message_id = ?", d.ProviderMessageID).
+		Set("sent_at = ?", d.SentAt).
 		Where("id = ?", messageID.String()).
 		Exec(ctx)
 	if err != nil {
@@ -429,6 +431,32 @@ func (s *Store) UpdateMessageStatus(ctx context.Context, messageID id.MessageID,
 		return store.ErrMessageNotFound
 	}
 	return nil
+}
+
+func (s *Store) CountMessages(ctx context.Context, appID string, since time.Time) ([]message.Count, error) {
+	// created_at is TEXT holding Go's time.String() form. A bound time.Time
+	// in UTC compares correctly against it; an RFC3339 string matches nothing.
+	rows, err := s.sdb.Query(ctx, `
+SELECT status, channel, COUNT(*)
+FROM herald_messages
+WHERE app_id = ? AND created_at >= ?
+GROUP BY status, channel
+ORDER BY status, channel`, appID, since.UTC())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []message.Count{}
+	for rows.Next() {
+		var c message.Count
+		var status string
+		if err := rows.Scan(&status, &c.Channel, &c.N); err != nil {
+			return nil, err
+		}
+		c.Status = message.Status(status)
+		result = append(result, c)
+	}
+	return result, rows.Err()
 }
 
 func (s *Store) ListMessages(ctx context.Context, appID string, opts message.ListOptions) ([]*message.Message, error) {

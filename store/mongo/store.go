@@ -463,19 +463,52 @@ func (s *Store) GetMessage(ctx context.Context, messageID id.MessageID) (*messag
 	return fromMessageModel(&m)
 }
 
-func (s *Store) UpdateMessageStatus(ctx context.Context, messageID id.MessageID, status message.Status, errMsg string) error {
+func (s *Store) RecordDelivery(ctx context.Context, messageID id.MessageID, d message.Delivery) error {
 	res, err := s.mdb.NewUpdate((*messageModel)(nil)).
 		Filter(bson.M{"_id": messageID.String()}).
-		Set("status", string(status)).
-		Set("error", errMsg).
+		Set("status", string(d.Status)).
+		Set("error", d.Error).
+		Set("provider_message_id", d.ProviderMessageID).
+		Set("sent_at", d.SentAt).
 		Exec(ctx)
 	if err != nil {
-		return fmt.Errorf("herald/mongo: update message status: %w", err)
+		return fmt.Errorf("herald/mongo: record delivery: %w", err)
 	}
 	if res.MatchedCount() == 0 {
 		return store.ErrMessageNotFound
 	}
 	return nil
+}
+
+func (s *Store) CountMessages(ctx context.Context, appID string, since time.Time) ([]message.Count, error) {
+	pipeline := mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{"app_id": appID, "created_at": bson.M{"$gte": since.UTC()}}}},
+		{{Key: "$group", Value: bson.M{
+			"_id": bson.M{"status": "$status", "channel": "$channel"},
+			"n":   bson.M{"$sum": 1},
+		}}},
+		{{Key: "$sort", Value: bson.D{{Key: "_id.status", Value: 1}, {Key: "_id.channel", Value: 1}}}},
+	}
+	cur, err := s.mdb.Collection(colMessages).Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, fmt.Errorf("herald/mongo: count messages: %w", err)
+	}
+	defer cur.Close(ctx)
+	result := []message.Count{}
+	for cur.Next(ctx) {
+		var row struct {
+			ID struct {
+				Status  string `bson:"status"`
+				Channel string `bson:"channel"`
+			} `bson:"_id"`
+			N int `bson:"n"`
+		}
+		if err := cur.Decode(&row); err != nil {
+			return nil, fmt.Errorf("herald/mongo: decode count: %w", err)
+		}
+		result = append(result, message.Count{Status: message.Status(row.ID.Status), Channel: row.ID.Channel, N: row.N})
+	}
+	return result, cur.Err()
 }
 
 func (s *Store) ListMessages(ctx context.Context, appID string, opts message.ListOptions) ([]*message.Message, error) {

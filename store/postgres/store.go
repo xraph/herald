@@ -406,11 +406,13 @@ func (s *Store) GetMessage(ctx context.Context, messageID id.MessageID) (*messag
 	return fromMessageModel(m)
 }
 
-func (s *Store) UpdateMessageStatus(ctx context.Context, messageID id.MessageID, status message.Status, errMsg string) error {
+func (s *Store) RecordDelivery(ctx context.Context, messageID id.MessageID, d message.Delivery) error {
 	res, err := s.pg.NewUpdate((*messageModel)(nil)).
-		Set("status = $1", string(status)).
-		Set("error = $2", errMsg).
-		Where("id = $3", messageID.String()).
+		Set("status = $1", string(d.Status)).
+		Set("error = $2", d.Error).
+		Set("provider_message_id = $3", d.ProviderMessageID).
+		Set("sent_at = $4", d.SentAt).
+		Where("id = $5", messageID.String()).
 		Exec(ctx)
 	if err != nil {
 		return err
@@ -423,6 +425,30 @@ func (s *Store) UpdateMessageStatus(ctx context.Context, messageID id.MessageID,
 		return store.ErrMessageNotFound
 	}
 	return nil
+}
+
+func (s *Store) CountMessages(ctx context.Context, appID string, since time.Time) ([]message.Count, error) {
+	rows, err := s.pg.Query(ctx, `
+SELECT status, channel, COUNT(*)
+FROM herald_messages
+WHERE app_id = $1 AND created_at >= $2
+GROUP BY status, channel
+ORDER BY status, channel`, appID, since.UTC())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []message.Count{}
+	for rows.Next() {
+		var c message.Count
+		var status string
+		if err := rows.Scan(&status, &c.Channel, &c.N); err != nil {
+			return nil, err
+		}
+		c.Status = message.Status(status)
+		result = append(result, c)
+	}
+	return result, rows.Err()
 }
 
 func (s *Store) ListMessages(ctx context.Context, appID string, opts message.ListOptions) ([]*message.Message, error) {

@@ -27,4 +27,6 @@ func Run(t *testing.T, open Opener) {
 	t.Run("EmptyAppIsExact", func(t *testing.T) { testEmptyAppIsExact(t, open(t)) })
 	t.Run("Ordering", func(t *testing.T) { testOrdering(t, open(t)) })
 	t.Run("MessagePaging", func(t *testing.T) { testMessagePaging(t, open(t)) })
+	t.Run("RecordDelivery", func(t *testing.T) { testRecordDelivery(t, open(t)) })
+	t.Run("CountMessages", func(t *testing.T) { testCountMessages(t, open(t)) })
 }

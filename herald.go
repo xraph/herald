@@ -180,7 +180,9 @@ func (h *Herald) Send(ctx context.Context, req *SendRequest) (*SendResult, error
 		if sendErr != nil {
 			msg.Status = message.StatusFailed
 			msg.Error = sendErr.Error()
-			_ = h.store.UpdateMessageStatus(ctx, msg.ID, message.StatusFailed, sendErr.Error()) //nolint:errcheck // best-effort status update
+			_ = h.store.RecordDelivery(ctx, msg.ID, message.Delivery{ //nolint:errcheck // best-effort status update
+				Status: message.StatusFailed, Error: sendErr.Error(),
+			})
 
 			results = append(results, &SendResult{
 				MessageID:  msg.ID,
@@ -194,7 +196,13 @@ func (h *Herald) Send(ctx context.Context, req *SendRequest) (*SendResult, error
 		sentAt := time.Now().UTC()
 		msg.Status = message.StatusSent
 		msg.SentAt = &sentAt
-		_ = h.store.UpdateMessageStatus(ctx, msg.ID, message.StatusSent, "") //nolint:errcheck // best-effort status update
+		providerMessageID := ""
+		if result != nil {
+			providerMessageID = result.ProviderMessageID
+		}
+		_ = h.store.RecordDelivery(ctx, msg.ID, message.Delivery{ //nolint:errcheck // best-effort status update
+			Status: message.StatusSent, ProviderMessageID: providerMessageID, SentAt: &sentAt,
+		})
 
 		// For in-app channel, also create inbox entry
 		if channel == string(ChannelInApp) && req.UserID != "" {

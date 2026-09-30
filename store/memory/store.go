@@ -314,20 +314,52 @@ func (s *Store) GetMessage(_ context.Context, messageID id.MessageID) (*message.
 	return cloneMessage(m), nil
 }
 
-func (s *Store) UpdateMessageStatus(_ context.Context, messageID id.MessageID, status message.Status, errMsg string) error {
+func (s *Store) RecordDelivery(_ context.Context, messageID id.MessageID, d message.Delivery) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	m, ok := s.messages[messageID.String()]
 	if !ok {
 		return store.ErrMessageNotFound
 	}
-	m.Status = status
-	m.Error = errMsg
-	if status == message.StatusSent {
-		now := time.Now().UTC()
-		m.SentAt = &now
+	m.Status = d.Status
+	m.Error = d.Error
+	m.ProviderMessageID = d.ProviderMessageID
+	m.SentAt = nil
+	if d.SentAt != nil {
+		t := *d.SentAt
+		m.SentAt = &t
 	}
 	return nil
+}
+
+func (s *Store) CountMessages(_ context.Context, appID string, since time.Time) ([]message.Count, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	type key struct {
+		status  message.Status
+		channel string
+	}
+	counts := map[key]int{}
+	for _, m := range s.messages {
+		if m.AppID == appID && !m.CreatedAt.Before(since) {
+			counts[key{m.Status, m.Channel}]++
+		}
+	}
+	result := make([]message.Count, 0, len(counts))
+	for k, n := range counts {
+		result = append(result, message.Count{Status: k.status, Channel: k.channel, N: n})
+	}
+	sortCounts(result)
+	return result, nil
+}
+
+func sortCounts(cs []message.Count) {
+	sort.Slice(cs, func(i, j int) bool {
+		if cs[i].Status != cs[j].Status {
+			return cs[i].Status < cs[j].Status
+		}
+		return cs[i].Channel < cs[j].Channel
+	})
 }
 
 func (s *Store) ListMessages(_ context.Context, appID string, opts message.ListOptions) ([]*message.Message, error) {

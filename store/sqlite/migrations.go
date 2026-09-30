@@ -229,5 +229,17 @@ CREATE TABLE IF NOT EXISTS herald_scoped_configs (
 				return err
 			},
 		},
+		&migrate.Migration{
+			Name:    "add_message_provider_message_id",
+			Version: "20260930000001",
+			Up: func(ctx context.Context, exec migrate.Executor) error {
+				_, err := exec.Exec(ctx, `ALTER TABLE herald_messages ADD COLUMN provider_message_id TEXT NOT NULL DEFAULT ''`)
+				return err
+			},
+			Down: func(ctx context.Context, exec migrate.Executor) error {
+				_, err := exec.Exec(ctx, `ALTER TABLE herald_messages DROP COLUMN provider_message_id`)
+				return err
+			},
+		},
 	)
 }
