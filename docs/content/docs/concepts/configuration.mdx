@@ -68,11 +68,13 @@ h, err := herald.New(
 
 | Option | Description |
 |--------|-------------|
-| `WithStore(s store.Store)` | Sets the persistence backend. **Required** -- Herald returns `ErrNoStore` without it. |
+| `WithStore(s store.Store)` | Sets the persistence backend. **Required**: Herald returns `ErrNoStore` without it. |
 | `WithLogger(l *slog.Logger)` | Sets the structured logger. Defaults to `slog.Default()`. |
 | `WithDriver(d driver.Driver)` | Registers a notification driver (SMTP, Twilio, FCM, etc.). Can be called multiple times. |
 | `WithDefaultLocale(locale string)` | Overrides the default locale for template rendering. |
 | `WithMaxBatchSize(n int)` | Overrides the maximum batch size. |
+| `WithCredentialKey(keyID string, key []byte)` | Encrypts provider credentials at rest with a 32-byte AES-256 key. `keyID` is stored beside every value it encrypts. See [Provider credentials](#provider-credentials). |
+| `WithPreviousCredentialKey(keyID string, key []byte)` | Adds an old key that only decrypts, for rotation. Needs a current key too. |
 
 ### Minimal standalone setup
 
@@ -126,6 +128,9 @@ type Config struct {
 | `DisableRoutes` | `bool` | `false` | When `true`, the extension does not register routes automatically. |
 | `DisableMigrate` | `bool` | `false` | When `true`, the extension skips automatic schema migration. |
 | `GroveDatabase` | `string` | `""` | Name of the Grove database in the DI container. Empty uses the default unnamed DB. |
+| `CredentialsKey` | `string` | `""` | `credentials_key`: 32 bytes, standard base64. Encrypts provider credentials at rest. Supports `${ENV}` interpolation. |
+| `CredentialsKeyID` | `string` | `"k1"` | `credentials_key_id`: stored beside every value the key encrypts. Change it when you rotate. |
+| `PreviousCredentialsKeys` | `[]CredentialKeyConfig` | none | `previous_credentials_keys`: a list of `{id, key}`. They only decrypt, so values written under an older key keep working. |
 
 ### Extension options
 
@@ -150,6 +155,7 @@ ext := extension.New(
 | `WithDisableMigrate()` | Disables automatic schema migration. |
 | `WithRequireConfig(bool)` | Requires config to be present in YAML files (errors if missing). |
 | `WithGroveDatabase(name string)` | Sets the Grove database name for auto-detection of the store backend. |
+| `WithAPIMiddleware(mw ...forge.Middleware)` | Runs your middleware in front of every Herald REST route. See [Protecting the REST API](#protecting-the-rest-api). |
 
 ### YAML configuration
 
@@ -169,6 +175,11 @@ extensions:
     disable_routes: false
     disable_migrate: false
     grove_database: "primary"
+    credentials_key: "${HERALD_CREDENTIALS_KEY}"
+    credentials_key_id: "2026-09"
+    previous_credentials_keys:
+      - id: "k1"
+        key: "${HERALD_OLD_CREDENTIALS_KEY}"
 ```
 
 YAML configuration takes precedence over programmatic defaults. Programmatic boolean flags (`DisableRoutes`, `DisableMigrate`) override YAML when set to `true`.
@@ -195,17 +206,66 @@ case "mongo":
 }
 ```
 
+### Protecting the REST API
+
+Herald doesn't know your auth scheme, so it doesn't authenticate anything on its own. You put your auth in front of its routes with `WithAPIMiddleware`:
+
+```go
+ext := extension.New(
+    extension.WithAPIMiddleware(requireStaff, bindAppID),
+)
+```
+
+The middleware runs on every route Herald mounts. Without it, startup logs a warning that the API is unauthenticated.
+
+Tenant isolation rests on the same middleware. Herald takes `app_id` from the request as given, so your middleware has to bind each caller to the app they're allowed to use. Herald then answers 404 for any row outside that app.
+
+If you turn Herald's routes off (`WithDisableRoutes`) and mount them yourself through `ext.RegisterRoutes(router)`, none of this middleware runs. Put your own on that router with `router.Use` before you call `RegisterRoutes`, or every route is open.
+
 ### Built-in drivers
 
 The Forge extension automatically registers all built-in drivers during `Init`:
 
-- `email.SMTPDriver` -- SMTP email delivery
-- `email.ResendDriver` -- Resend API email delivery
-- `sms.TwilioDriver` -- Twilio SMS delivery
-- `push.FCMDriver` -- Firebase Cloud Messaging push notifications
-- `inapp.Driver` -- In-app inbox notifications
+- `email.SMTPDriver`: SMTP email delivery
+- `email.ResendDriver`: Resend API email delivery
+- `sms.TwilioDriver`: Twilio SMS delivery
+- `push.FCMDriver`: Firebase Cloud Messaging push notifications
+- `inapp.Driver`: In-app inbox notifications
 
 You only need to call `WithDriver` for custom or third-party drivers.
+
+## Provider credentials
+
+Set `credentials_key` and Herald encrypts provider credentials before it stores them. You need 32 random bytes, base64 encoded:
+
+```bash
+openssl rand -base64 32
+```
+
+Each value is encrypted on its own with AES-256-GCM and carries the ID of the key that encrypted it (`credentials_key_id`, `k1` by default). Herald decrypts them in memory only to send, or to validate an update, and the REST API never returns them. You see which keys a provider has and whether each is encrypted, never the values.
+
+At startup the extension tells you which mode you're in. With a key it logs an Info line naming the key ID. Without one it logs a warning:
+
+```
+herald: provider credentials are stored in plaintext; set credentials_key to encrypt them
+```
+
+It never logs key material.
+
+### Encrypting rows you already have
+
+Turning the key on doesn't touch what's already stored. Run `EncryptStoredCredentials` once for each app after you set it:
+
+```go
+rep, err := h.EncryptStoredCredentials(ctx, "myapp")
+// rep.Providers, rep.ValuesEncrypted, rep.AlreadyEncrypted
+```
+
+Over REST that's `POST /herald/v1/providers/encrypt?app_id=myapp`. A second run changes nothing, so it's safe to repeat. Without a key configured it fails with `ErrNoCredentialKey`.
+
+### Rotating the key
+
+Put the new key in `credentials_key` with a new `credentials_key_id`, and move the old one into `previous_credentials_keys` under its old ID. New writes use the new key, and values written under the old one still decrypt. A provider whose credentials were encrypted under a key you've removed entirely can't be sent through or updated: `UpdateProvider` refuses with `ErrCredentialKeyUnavailable`, names the missing key ID and leaves the stored row alone.
 
 ## Accessing the Herald instance
 

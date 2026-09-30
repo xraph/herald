@@ -3,9 +3,17 @@ title: HTTP API
 description: Complete HTTP API reference for Herald notification endpoints.
 ---
 
-Herald exposes a RESTful HTTP API through the Forge framework. When using the Forge extension, all routes are mounted under a configurable base path (default: `/herald`). The API supports providers, templates, template versions, sending notifications, delivery log, user inbox, preferences, and scoped configuration.
+Herald exposes a RESTful HTTP API through the Forge framework. When you use the Forge extension, every route is mounted under `/v1` below a configurable base path (default: `/herald`), so providers live at `/herald/v1/providers`. The API covers providers, templates, template versions, sending, the delivery log, the user inbox, preferences and scoped configuration.
 
 All endpoints accept and return JSON. TypeID strings are used as entity identifiers (e.g., `hpvd_01h...` for providers).
+
+Herald doesn't authenticate requests. Protect the routes with `extension.WithAPIMiddleware` (see [Configuration](/docs/concepts/configuration)). That middleware is also what keeps tenants apart: Herald takes `app_id` from the request as given, so your middleware has to bind each caller to the app they're allowed to use.
+
+## App IDs
+
+List routes need `app_id` and answer 400 without it. Their filters and paging parameters are optional, so `GET /herald/v1/providers?app_id=myapp` lists every provider of the app.
+
+By-ID routes (`/providers/:id`, `/templates/:id`, versions, `/messages/:id`, `/inbox/:id`) take `app_id` as an optional query parameter. Leave it out and you mean the `""` app. A row that belongs to another app answers 404, exactly like a row that doesn't exist, so a response never tells you that an ID exists somewhere else.
 
 ## Send
 
@@ -14,7 +22,7 @@ All endpoints accept and return JSON. TypeID strings are used as entity identifi
 Sends a notification on a single channel.
 
 ```
-POST /herald/send
+POST /herald/v1/send
 ```
 
 **Request body:**
@@ -62,16 +70,19 @@ POST /herald/send
   "message_id": "hmsg_01h9xz...",
   "status": "sent",
   "provider_id": "hpvd_01h9xz...",
-  "error": ""
+  "provider_message_id": "4ef7a2c0-...",
+  "logged": true
 }
 ```
+
+`provider_id` is always Herald's own provider ID. The ID the vendor handed back, when it gave one, is `provider_message_id`. `logged` is false when the message log couldn't be written; the send still happened. A user who opted out gets `status: "suppressed"` and a message ID, and nothing is sent.
 
 ### Multi-Channel Notify
 
 Sends a notification across multiple channels using a template.
 
 ```
-POST /herald/notify
+POST /herald/v1/notify
 ```
 
 **Request body:**
@@ -123,10 +134,12 @@ POST /herald/notify
 
 ## Providers
 
+Credential values never come back from the API, whether you create, read or update a provider. Every provider response carries `credentials` as a list of `{key, protection, key_id}`, so you can see which keys are set and whether each one is encrypted (`protection` is `aes-256-gcm` or `plaintext`, and `key_id` names the key that encrypted it).
+
 ### Create Provider
 
 ```
-POST /herald/providers
+POST /herald/v1/providers
 ```
 
 **Request body:**
@@ -138,12 +151,12 @@ POST /herald/providers
   "channel": "email",
   "driver": "smtp",
   "credentials": {
-    "host": "smtp.example.com",
-    "port": "587",
     "username": "noreply@example.com",
     "password": "secret"
   },
   "settings": {
+    "host": "smtp.example.com",
+    "port": "587",
     "from": "noreply@example.com",
     "from_name": "My App"
   },
@@ -151,6 +164,8 @@ POST /herald/providers
   "enabled": true
 }
 ```
+
+Herald validates the provider before it stores anything: the driver has to exist and handle the channel, no secret may sit in `settings`, and the driver's own checks have to pass. When a credential key is configured, credentials are encrypted before they're written.
 
 **Response (201):**
 
@@ -161,8 +176,11 @@ POST /herald/providers
   "name": "SMTP Production",
   "channel": "email",
   "driver": "smtp",
-  "credentials": {"host": "smtp.example.com", "port": "587", "username": "noreply@example.com", "password": "secret"},
-  "settings": {"from": "noreply@example.com", "from_name": "My App"},
+  "credentials": [
+    {"key": "password", "protection": "aes-256-gcm", "key_id": "k1"},
+    {"key": "username", "protection": "aes-256-gcm", "key_id": "k1"}
+  ],
+  "settings": {"host": "smtp.example.com", "port": "587", "from": "noreply@example.com", "from_name": "My App"},
   "priority": 0,
   "enabled": true,
   "created_at": "2024-01-15T10:30:00Z",
@@ -173,7 +191,7 @@ POST /herald/providers
 ### List Providers
 
 ```
-GET /herald/providers?app_id=myapp&channel=email
+GET /herald/v1/providers?app_id=myapp&channel=email
 ```
 
 | Parameter | Type | Required | Description |
@@ -186,43 +204,82 @@ GET /herald/providers?app_id=myapp&channel=email
 ### Get Provider
 
 ```
-GET /herald/providers/:id
+GET /herald/v1/providers/:id?app_id=myapp
 ```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `app_id` | query | No | The provider's application. Absent means the `""` app. Another app's provider is a 404. |
 
 **Response (200):** Single provider object.
 
 ### Update Provider
 
 ```
-PUT /herald/providers/:id
+PUT /herald/v1/providers/:id?app_id=myapp
 ```
 
-**Request body** (all fields optional):
+The body is partial. Leave a field out and it stays as it was, so a request without `enabled` doesn't switch the provider off. `credentials` and `settings` merge into what's stored: keys you send are set, keys listed in `remove_credentials` or `remove_settings` are deleted, and everything else is kept. A provider's channel and driver can't change after it's created, so create a new provider for that.
+
+**Request body** (every field optional):
 
 ```json
 {
   "name": "Updated Name",
-  "credentials": {"host": "new-smtp.example.com"},
-  "enabled": false
+  "priority": 1,
+  "enabled": false,
+  "credentials": {"password": "new-secret"},
+  "remove_credentials": ["username"],
+  "settings": {"port": "465", "use_tls": "true"},
+  "remove_settings": ["from_name"]
 }
 ```
+
+Moving `base_url` or `host` to a new value needs the provider's secret credentials in the same request. Without that rule, anyone who can edit a provider could point it at a server they run and collect the API key or password on the next send. So send the secrets again next to the new target:
+
+```json
+{
+  "settings": {"host": "smtp.new-vendor.example"},
+  "credentials": {"password": "secret"}
+}
+```
+
+Leave them out and you get a 400 that names the setting and the keys to enter again, and nothing is written. A secret is whatever the driver's schema marks secret. For a driver with no schema, that's every credential. You don't need to send anything again to remove `base_url` or `host` (which puts the vendor's default back) or to set one to the value it already has.
 
 **Response (200):** Updated provider object.
 
 ### Delete Provider
 
 ```
-DELETE /herald/providers/:id
+DELETE /herald/v1/providers/:id?app_id=myapp
 ```
 
 **Response:** 204 No Content.
+
+### Encrypt Stored Credentials
+
+```
+POST /herald/v1/providers/encrypt?app_id=myapp
+```
+
+Encrypts every plaintext credential of every provider in the app. Turning on a credential key doesn't touch rows that are already stored, so run this once per app after you set the key. A second run changes nothing. Without a configured key it answers 400.
+
+**Response (200):**
+
+```json
+{
+  "providers": 3,
+  "values_encrypted": 5,
+  "already_encrypted": 0
+}
+```
 
 ## Templates
 
 ### Create Template
 
 ```
-POST /herald/templates
+POST /herald/v1/templates
 ```
 
 **Request body:**
@@ -247,7 +304,7 @@ POST /herald/templates
 ### List Templates
 
 ```
-GET /herald/templates?app_id=myapp&channel=email
+GET /herald/v1/templates?app_id=myapp&channel=email
 ```
 
 | Parameter | Type | Required | Description |
@@ -260,7 +317,7 @@ GET /herald/templates?app_id=myapp&channel=email
 ### Get Template
 
 ```
-GET /herald/templates/:id
+GET /herald/v1/templates/:id
 ```
 
 **Response (200):** Template object with `versions` array populated.
@@ -268,7 +325,7 @@ GET /herald/templates/:id
 ### Update Template
 
 ```
-PUT /herald/templates/:id
+PUT /herald/v1/templates/:id
 ```
 
 **Request body** (all fields optional):
@@ -286,7 +343,7 @@ PUT /herald/templates/:id
 ### Delete Template
 
 ```
-DELETE /herald/templates/:id
+DELETE /herald/v1/templates/:id
 ```
 
 Deletes the template and all its associated versions.
@@ -298,7 +355,7 @@ Deletes the template and all its associated versions.
 ### Create Version
 
 ```
-POST /herald/templates/:id/versions
+POST /herald/v1/templates/:id/versions
 ```
 
 **Request body:**
@@ -318,7 +375,7 @@ POST /herald/templates/:id/versions
 ### List Versions
 
 ```
-GET /herald/templates/:id/versions
+GET /herald/v1/templates/:id/versions
 ```
 
 **Response (200):** Array of version objects for the specified template.
@@ -326,7 +383,7 @@ GET /herald/templates/:id/versions
 ### Update Version
 
 ```
-PUT /herald/templates/:id/versions/:versionId
+PUT /herald/v1/templates/:id/versions/:versionId
 ```
 
 **Request body** (all fields optional):
@@ -344,7 +401,7 @@ PUT /herald/templates/:id/versions/:versionId
 ### Delete Version
 
 ```
-DELETE /herald/templates/:id/versions/:versionId
+DELETE /herald/v1/templates/:id/versions/:versionId
 ```
 
 **Response:** 204 No Content.
@@ -354,7 +411,7 @@ DELETE /herald/templates/:id/versions/:versionId
 ### List Messages
 
 ```
-GET /herald/messages?app_id=myapp&status=sent&channel=email&offset=0&limit=50
+GET /herald/v1/messages?app_id=myapp&status=sent&channel=email&offset=0&limit=50
 ```
 
 | Parameter | Type | Required | Description |
@@ -391,7 +448,7 @@ GET /herald/messages?app_id=myapp&status=sent&channel=email&offset=0&limit=50
 ### Get Message
 
 ```
-GET /herald/messages/:id
+GET /herald/v1/messages/:id
 ```
 
 **Response (200):** Single message object.
@@ -401,7 +458,7 @@ GET /herald/messages/:id
 ### List Notifications
 
 ```
-GET /herald/inbox?app_id=myapp&user_id=user-alice&offset=0&limit=50
+GET /herald/v1/inbox?app_id=myapp&user_id=user-alice&offset=0&limit=50
 ```
 
 | Parameter | Type | Required | Description |
@@ -432,7 +489,7 @@ GET /herald/inbox?app_id=myapp&user_id=user-alice&offset=0&limit=50
 ### Unread Count
 
 ```
-GET /herald/inbox/unread/count?app_id=myapp&user_id=user-alice
+GET /herald/v1/inbox/unread/count?app_id=myapp&user_id=user-alice
 ```
 
 **Response (200):**
@@ -446,7 +503,7 @@ GET /herald/inbox/unread/count?app_id=myapp&user_id=user-alice
 ### Mark Read
 
 ```
-PUT /herald/inbox/:id/read
+PUT /herald/v1/inbox/:id/read
 ```
 
 Marks a single notification as read.
@@ -456,7 +513,7 @@ Marks a single notification as read.
 ### Mark All Read
 
 ```
-PUT /herald/inbox/read-all?app_id=myapp&user_id=user-alice
+PUT /herald/v1/inbox/read-all?app_id=myapp&user_id=user-alice
 ```
 
 Marks all unread notifications for the user as read.
@@ -466,7 +523,7 @@ Marks all unread notifications for the user as read.
 ### Delete Notification
 
 ```
-DELETE /herald/inbox/:id
+DELETE /herald/v1/inbox/:id
 ```
 
 **Response:** 204 No Content.
@@ -476,7 +533,7 @@ DELETE /herald/inbox/:id
 ### Get Preferences
 
 ```
-GET /herald/preferences?app_id=myapp&user_id=user-alice
+GET /herald/v1/preferences?app_id=myapp&user_id=user-alice
 ```
 
 **Response (200):**
@@ -505,7 +562,7 @@ GET /herald/preferences?app_id=myapp&user_id=user-alice
 ### Update Preferences
 
 ```
-PUT /herald/preferences
+PUT /herald/v1/preferences
 ```
 
 **Request body:**
@@ -532,7 +589,7 @@ The `overrides` map keys are template slugs. Each value is a `ChannelPreference`
 ### List Configs
 
 ```
-GET /herald/config?app_id=myapp
+GET /herald/v1/config?app_id=myapp
 ```
 
 Returns all scoped configurations (app, org, user) for an application.
@@ -568,7 +625,7 @@ Returns all scoped configurations (app, org, user) for an application.
 ### Set App Config
 
 ```
-PUT /herald/config/app
+PUT /herald/v1/config/app
 ```
 
 **Request body:**
@@ -586,12 +643,14 @@ PUT /herald/config/app
 }
 ```
 
+A provider ID has to name a provider of the same app, on the channel of the field it sits in (`email_provider_id` takes an email provider, `sms_provider_id` an SMS provider, and so on for `push_provider_id`, `webhook_provider_id` and `chat_provider_id`). Anything else answers 400 and nothing is stored. The same rule applies to org and user configs.
+
 **Response (200):** Scoped config object.
 
 ### Set Org Config
 
 ```
-PUT /herald/config/org/:orgId
+PUT /herald/v1/config/org/:orgId
 ```
 
 **Request body:**
@@ -605,14 +664,14 @@ PUT /herald/config/org/:orgId
 }
 ```
 
-All provider ID and sender fields are optional -- only set fields are applied.
+Every provider ID and sender field is optional.
 
 **Response (200):** Scoped config object.
 
 ### Set User Config
 
 ```
-PUT /herald/config/user/:userId
+PUT /herald/v1/config/user/:userId
 ```
 
 **Request body:**
@@ -630,7 +689,7 @@ PUT /herald/config/user/:userId
 ### Delete Org Config
 
 ```
-DELETE /herald/config/org/:orgId?app_id=myapp
+DELETE /herald/v1/config/org/:orgId?app_id=myapp
 ```
 
 **Response:** 204 No Content.
@@ -638,65 +697,66 @@ DELETE /herald/config/org/:orgId?app_id=myapp
 ### Delete User Config
 
 ```
-DELETE /herald/config/user/:userId?app_id=myapp
+DELETE /herald/v1/config/user/:userId?app_id=myapp
 ```
 
 **Response:** 204 No Content.
 
 ## Error Responses
 
-All error responses follow the Forge framework's standard error format:
+Errors come back in the Forge framework's standard format:
 
 ```json
 {
-  "error": {
-    "code": 400,
-    "message": "invalid provider ID"
-  }
+  "code": 400,
+  "error": "herald: invalid provider: changing host sends credentials to a new server; enter password again in the same update"
 }
 ```
+
+An error message names keys and IDs. It never contains a credential value.
 
 ### Common Error Codes
 
 | Status | Meaning |
 |--------|---------|
-| 400 | Bad request -- invalid ID format or missing required fields |
-| 404 | Entity not found |
-| 409 | Conflict -- duplicate slug/channel/locale combination |
-| 500 | Internal server error |
+| 400 | Bad input: a malformed ID, a missing required parameter such as `app_id` on a list route, a provider that fails validation, a routing rule naming a provider it can't use, a template that won't render, or a credential problem (no key configured, a key that isn't configured any more, a stored value that can't be read) |
+| 404 | The row doesn't exist, or it belongs to another app |
+| 409 | A duplicate: the same template slug and channel in one app, or a second version for the same locale |
+| 500 | Anything without a domain meaning, such as a database failure |
 
 ## Route Summary
 
 | Method | Path | Operation |
 |--------|------|-----------|
-| `POST` | `/herald/send` | Send single notification |
-| `POST` | `/herald/notify` | Multi-channel notify |
-| `POST` | `/herald/providers` | Create provider |
-| `GET` | `/herald/providers` | List providers |
-| `GET` | `/herald/providers/:id` | Get provider |
-| `PUT` | `/herald/providers/:id` | Update provider |
-| `DELETE` | `/herald/providers/:id` | Delete provider |
-| `POST` | `/herald/templates` | Create template |
-| `GET` | `/herald/templates` | List templates |
-| `GET` | `/herald/templates/:id` | Get template |
-| `PUT` | `/herald/templates/:id` | Update template |
-| `DELETE` | `/herald/templates/:id` | Delete template |
-| `POST` | `/herald/templates/:id/versions` | Create version |
-| `GET` | `/herald/templates/:id/versions` | List versions |
-| `PUT` | `/herald/templates/:id/versions/:versionId` | Update version |
-| `DELETE` | `/herald/templates/:id/versions/:versionId` | Delete version |
-| `GET` | `/herald/messages` | List messages |
-| `GET` | `/herald/messages/:id` | Get message |
-| `GET` | `/herald/inbox` | List inbox |
-| `GET` | `/herald/inbox/unread/count` | Unread count |
-| `PUT` | `/herald/inbox/:id/read` | Mark read |
-| `PUT` | `/herald/inbox/read-all` | Mark all read |
-| `DELETE` | `/herald/inbox/:id` | Delete notification |
-| `GET` | `/herald/preferences` | Get preferences |
-| `PUT` | `/herald/preferences` | Update preferences |
-| `GET` | `/herald/config` | List configs |
-| `PUT` | `/herald/config/app` | Set app config |
-| `PUT` | `/herald/config/org/:orgId` | Set org config |
-| `PUT` | `/herald/config/user/:userId` | Set user config |
-| `DELETE` | `/herald/config/org/:orgId` | Delete org config |
-| `DELETE` | `/herald/config/user/:userId` | Delete user config |
+| `POST` | `/herald/v1/send` | Send single notification |
+| `POST` | `/herald/v1/notify` | Multi-channel notify |
+| `POST` | `/herald/v1/providers` | Create provider |
+| `POST` | `/herald/v1/providers/encrypt` | Encrypt stored credentials |
+| `GET` | `/herald/v1/providers` | List providers |
+| `GET` | `/herald/v1/providers/:id` | Get provider |
+| `PUT` | `/herald/v1/providers/:id` | Update provider |
+| `DELETE` | `/herald/v1/providers/:id` | Delete provider |
+| `POST` | `/herald/v1/templates` | Create template |
+| `GET` | `/herald/v1/templates` | List templates |
+| `GET` | `/herald/v1/templates/:id` | Get template |
+| `PUT` | `/herald/v1/templates/:id` | Update template |
+| `DELETE` | `/herald/v1/templates/:id` | Delete template |
+| `POST` | `/herald/v1/templates/:id/versions` | Create version |
+| `GET` | `/herald/v1/templates/:id/versions` | List versions |
+| `PUT` | `/herald/v1/templates/:id/versions/:versionId` | Update version |
+| `DELETE` | `/herald/v1/templates/:id/versions/:versionId` | Delete version |
+| `GET` | `/herald/v1/messages` | List messages |
+| `GET` | `/herald/v1/messages/:id` | Get message |
+| `GET` | `/herald/v1/inbox` | List inbox |
+| `GET` | `/herald/v1/inbox/unread/count` | Unread count |
+| `PUT` | `/herald/v1/inbox/:id/read` | Mark read |
+| `PUT` | `/herald/v1/inbox/read-all` | Mark all read |
+| `DELETE` | `/herald/v1/inbox/:id` | Delete notification |
+| `GET` | `/herald/v1/preferences` | Get preferences |
+| `PUT` | `/herald/v1/preferences` | Update preferences |
+| `GET` | `/herald/v1/config` | List configs |
+| `PUT` | `/herald/v1/config/app` | Set app config |
+| `PUT` | `/herald/v1/config/org/:orgId` | Set org config |
+| `PUT` | `/herald/v1/config/user/:userId` | Set user config |
+| `DELETE` | `/herald/v1/config/org/:orgId` | Delete org config |
+| `DELETE` | `/herald/v1/config/user/:userId` | Delete user config |

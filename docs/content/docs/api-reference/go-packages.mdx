@@ -60,6 +60,8 @@ func WithDriver(d driver.Driver) Option
 func WithLogger(logger *slog.Logger) Option
 func WithDefaultLocale(locale string) Option
 func WithMaxBatchSize(n int) Option
+func WithCredentialKey(keyID string, key []byte) Option
+func WithPreviousCredentialKey(keyID string, key []byte) Option
 ```
 
 ### Config
@@ -110,10 +112,17 @@ type NotifyRequest struct {
 type SendResult struct {
     MessageID  id.MessageID   `json:"message_id"`
     Status     message.Status `json:"status"`
-    ProviderID string         `json:"provider_id,omitempty"`
-    Error      string         `json:"error,omitempty"`
+    // ProviderID is always Herald's provider ID.
+    ProviderID string `json:"provider_id,omitempty"`
+    // ProviderMessageID is the vendor's ID for the message, when it gave one.
+    ProviderMessageID string `json:"provider_message_id,omitempty"`
+    Error             string `json:"error,omitempty"`
+    // Logged is false when the message log couldn't be written.
+    Logged bool `json:"logged"`
 }
 ```
+
+`ProviderID` is always the ID of Herald's own provider row, the one you created. If you need to look a message up at the vendor, use `ProviderMessageID`, which is whatever ID the vendor handed back. `Logged` false means the send happened but the message log write failed, so the message won't show up in the log. A send to someone who opted out comes back with status `suppressed` and a message ID, and no driver is called.
 
 ### Channel Types
 
