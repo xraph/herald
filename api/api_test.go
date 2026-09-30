@@ -329,3 +329,18 @@ func TestMalformedStoredCredentialIsABadRequest(t *testing.T) {
 		t.Errorf("update over a malformed credential = %d %s, want 400", rec.Code, rec.Body)
 	}
 }
+
+func TestConnectionTargetInCredentialsIsABadRequest(t *testing.T) {
+	x := newHarness(t)
+	p := x.createProvider(t, "app_a")
+	rec := x.do(t, http.MethodPut, "/v1/providers/"+p.ID+"?app_id=app_a", map[string]any{
+		"credentials": map[string]string{"base_url": "https://attacker.example"},
+	})
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "base_url") {
+		t.Errorf("PUT with base_url in credentials = %d %s, want 400 naming base_url", rec.Code, rec.Body)
+	}
+	got := decode[api.ProviderResponse](t, x.do(t, http.MethodGet, "/v1/providers/"+p.ID+"?app_id=app_a", nil))
+	if len(got.Credentials) != 1 {
+		t.Errorf("a refused update changed the credentials: %+v", got.Credentials)
+	}
+}

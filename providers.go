@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/xraph/herald/credential"
+	"github.com/xraph/herald/driver"
 	"github.com/xraph/herald/id"
 	"github.com/xraph/herald/provider"
 )
@@ -54,6 +55,11 @@ type EncryptReport struct {
 // one of these at a server you control would do exactly that: the next send
 // carries the API key or password there. Changing one therefore requires the
 // secrets to be entered again in the same update.
+//
+// Send merges credentials under settings, so a target placed in credentials
+// reaches the driver too whenever no setting shadows it. ValidateProvider
+// refuses one there, and checkRetarget compares the merged value, never the
+// settings alone.
 var connectionTargets = []string{"base_url", "host"}
 
 // CreateProvider validates p, encrypts its credentials when a key is
@@ -104,9 +110,6 @@ func (h *Herald) UpdateProvider(ctx context.Context, appID string, providerID id
 
 	next := *existing
 	next.Settings = applyChanges(existing.Settings, u.SetSettings, u.RemoveSettings)
-	if rErr := h.checkRetarget(existing, next.Settings, u); rErr != nil {
-		return nil, rErr
-	}
 	if u.Name != nil {
 		next.Name = strings.TrimSpace(*u.Name)
 	}
@@ -127,6 +130,9 @@ func (h *Herald) UpdateProvider(ctx context.Context, appID string, providerID id
 	if vErr := h.ValidateProvider(&candidate); vErr != nil {
 		return nil, vErr
 	}
+	if rErr := h.checkRetarget(existing, plain, &candidate, u); rErr != nil {
+		return nil, rErr
+	}
 
 	stored := applyChanges(existing.Credentials, u.SetCredentials, u.RemoveCredentials)
 	if next.Credentials, err = h.seal(next.ID.String(), stored, slices.Collect(maps.Keys(u.SetCredentials))); err != nil {
@@ -139,16 +145,23 @@ func (h *Herald) UpdateProvider(ctx context.Context, appID string, providerID id
 	return &next, nil
 }
 
-// checkRetarget refuses an update that points a connection-target setting at
-// a new server while keeping stored secrets it did not supply again. Removing
-// a target, which reverts to the vendor default, or setting it to its current
-// value needs nothing. Secret means secret in the driver's schema; a driver
-// without a schema has every credential treated as secret. The error names
-// keys only.
-func (h *Herald) checkRetarget(existing *provider.Provider, settings map[string]string, u ProviderUpdate) error {
+// checkRetarget refuses an update that points a provider at a new server
+// while keeping stored secrets it did not supply again. It compares the
+// target a driver would actually read, credentials merged under settings the
+// way driverData merges them, before and after the update, from plaintext
+// (before is existing's credentials decrypted, after is the candidate's). A
+// target set in credentials counts as a move whatever its value. Removing a
+// target, so the vendor default applies, or keeping its current value needs
+// nothing, and a secret the same update removes needn't be sent. Secret
+// means secret in the driver's schema; a driver without a schema has every
+// credential treated as secret. The error names keys only.
+func (h *Herald) checkRetarget(existing *provider.Provider, before map[string]string, after *provider.Provider, u ProviderUpdate) error {
 	var moved []string
 	for _, k := range connectionTargets {
-		if v := settings[k]; v != "" && v != existing.Settings[k] {
+		_, smuggled := u.SetCredentials[k]
+		was := mergedValue(before, existing.Settings, k)
+		now := mergedValue(after.Credentials, after.Settings, k)
+		if smuggled || (now != "" && now != was) {
 			moved = append(moved, k)
 		}
 	}
@@ -180,6 +193,15 @@ func (h *Herald) checkRetarget(existing *provider.Provider, settings map[string]
 		ErrInvalidProvider, strings.Join(moved, " and "), strings.Join(missing, ", "))
 }
 
+// mergedValue is the value of k a driver reads: the setting when there is
+// one, even an empty one, and otherwise the credential.
+func mergedValue(creds, settings map[string]string, k string) string {
+	if v, ok := settings[k]; ok {
+		return v
+	}
+	return creds[k]
+}
+
 // DeleteProvider removes a provider of appID.
 func (h *Herald) DeleteProvider(ctx context.Context, appID string, providerID id.ProviderID) error {
 	if _, err := h.GetProvider(ctx, appID, providerID); err != nil {
@@ -189,8 +211,9 @@ func (h *Herald) DeleteProvider(ctx context.Context, appID string, providerID id
 }
 
 // ValidateProvider checks p the way Send will use it: the driver exists and
-// handles p's channel, no secret sits in settings, and the driver's own
-// Validate accepts credentials and settings merged as Send merges them.
+// handles p's channel, no secret sits in settings, no connection target
+// (base_url, host) or schema setting sits in credentials, and the driver's
+// own Validate accepts credentials and settings merged as Send merges them.
 // Encrypted credentials are decrypted first. Errors never contain a value.
 func (h *Herald) ValidateProvider(p *provider.Provider) error {
 	if strings.TrimSpace(p.Name) == "" {
@@ -203,10 +226,18 @@ func (h *Herald) ValidateProvider(p *provider.Provider) error {
 	if drv.Channel() != p.Channel {
 		return fmt.Errorf("%w: driver %s sends %s, not %s", ErrInvalidChannel, p.Driver, drv.Channel(), p.Channel)
 	}
+	for _, k := range connectionTargets {
+		if _, ok := p.Credentials[k]; ok {
+			return fmt.Errorf("%w: %s says where the driver connects and belongs in settings, not credentials", ErrInvalidProvider, k)
+		}
+	}
 	if fields, ok := h.drivers.Describe(p.Driver); ok {
 		for _, f := range fields {
 			if f.Secret && p.Settings[f.Key] != "" {
 				return fmt.Errorf("%w: %s is a secret and belongs in credentials, not settings", ErrInvalidProvider, f.Key)
+			}
+			if _, inCreds := p.Credentials[f.Key]; inCreds && f.Placement == driver.PlacementSetting {
+				return fmt.Errorf("%w: %s is a setting and belongs in settings, not credentials", ErrInvalidProvider, f.Key)
 			}
 		}
 	}

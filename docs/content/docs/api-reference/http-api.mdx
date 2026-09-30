@@ -165,7 +165,7 @@ POST /herald/v1/providers
 }
 ```
 
-Herald validates the provider before it stores anything: the driver has to exist and handle the channel, no secret may sit in `settings`, and the driver's own checks have to pass. When a credential key is configured, credentials are encrypted before they're written.
+Herald validates the provider before it stores anything: the driver has to exist and handle the channel, no secret may sit in `settings`, no setting may sit in `credentials`, and the driver's own checks have to pass. When a credential key is configured, credentials are encrypted before they're written.
 
 **Response (201):**
 
@@ -245,6 +245,8 @@ Moving `base_url` or `host` to a new value needs the provider's secret credentia
 ```
 
 Leave them out and you get a 400 that names the setting and the keys to enter again, and nothing is written. A secret is whatever the driver's schema marks secret. For a driver with no schema, that's every credential. You don't need to send anything again to remove `base_url` or `host` (which puts the vendor's default back) or to set one to the value it already has.
+
+The rule looks at the target the driver actually reads, which is `credentials` merged under `settings`. Putting `base_url` in `credentials`, or removing the setting so a credential copy shows through, doesn't get around it. Connection targets belong in `settings`: Herald answers 400 for `base_url` or `host` in `credentials`, and for any other key the driver's schema places in settings.
 
 **Response (200):** Updated provider object.
 
