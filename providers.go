@@ -48,6 +48,14 @@ type EncryptReport struct {
 	AlreadyEncrypted int `json:"already_encrypted"`
 }
 
+// connectionTargets are the settings that say where a driver connects. The
+// REST API and the dashboards never show credential values, so the right to
+// edit a provider must not become the right to read its secrets. Pointing
+// one of these at a server you control would do exactly that: the next send
+// carries the API key or password there. Changing one therefore requires the
+// secrets to be entered again in the same update.
+var connectionTargets = []string{"base_url", "host"}
+
 // CreateProvider validates p, encrypts its credentials when a key is
 // configured, and stores it. p is left holding what was stored.
 func (h *Herald) CreateProvider(ctx context.Context, p *provider.Provider) error {
@@ -86,7 +94,8 @@ func (h *Herald) GetProvider(ctx context.Context, appID string, providerID id.Pr
 // UpdateProvider applies u to a provider of appID. Credentials it sets are
 // encrypted; credentials it doesn't touch keep their stored form exactly. It
 // refuses, and writes nothing, when an existing credential can't be decrypted
-// for validation.
+// for validation, and when it moves base_url or host to a new server without
+// setting the provider's secret credentials again (see connectionTargets).
 func (h *Herald) UpdateProvider(ctx context.Context, appID string, providerID id.ProviderID, u ProviderUpdate) (*provider.Provider, error) {
 	existing, err := h.GetProvider(ctx, appID, providerID)
 	if err != nil {
@@ -95,6 +104,9 @@ func (h *Herald) UpdateProvider(ctx context.Context, appID string, providerID id
 
 	next := *existing
 	next.Settings = applyChanges(existing.Settings, u.SetSettings, u.RemoveSettings)
+	if rErr := h.checkRetarget(existing, next.Settings, u); rErr != nil {
+		return nil, rErr
+	}
 	if u.Name != nil {
 		next.Name = strings.TrimSpace(*u.Name)
 	}
@@ -125,6 +137,47 @@ func (h *Herald) UpdateProvider(ctx context.Context, appID string, providerID id
 		return nil, err
 	}
 	return &next, nil
+}
+
+// checkRetarget refuses an update that points a connection-target setting at
+// a new server while keeping stored secrets it did not supply again. Removing
+// a target, which reverts to the vendor default, or setting it to its current
+// value needs nothing. Secret means secret in the driver's schema; a driver
+// without a schema has every credential treated as secret. The error names
+// keys only.
+func (h *Herald) checkRetarget(existing *provider.Provider, settings map[string]string, u ProviderUpdate) error {
+	var moved []string
+	for _, k := range connectionTargets {
+		if v := settings[k]; v != "" && v != existing.Settings[k] {
+			moved = append(moved, k)
+		}
+	}
+	if len(moved) == 0 {
+		return nil
+	}
+	secret := func(string) bool { return true }
+	if fields, ok := h.drivers.Describe(existing.Driver); ok {
+		secrets := make(map[string]bool, len(fields))
+		for _, f := range fields {
+			if f.Secret {
+				secrets[f.Key] = true
+			}
+		}
+		secret = func(k string) bool { return secrets[k] }
+	}
+	var missing []string
+	for k := range existing.Credentials {
+		if !secret(k) || u.SetCredentials[k] != "" || slices.Contains(u.RemoveCredentials, k) {
+			continue
+		}
+		missing = append(missing, k)
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	sort.Strings(missing)
+	return fmt.Errorf("%w: changing %s sends credentials to a new server; enter %s again in the same update",
+		ErrInvalidProvider, strings.Join(moved, " and "), strings.Join(missing, ", "))
 }
 
 // DeleteProvider removes a provider of appID.
