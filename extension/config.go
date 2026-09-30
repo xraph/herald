@@ -30,6 +30,19 @@ type Config struct {
 	// startup (seed-if-absent). Credentials may use ${ENV} interpolation.
 	Providers []ProviderConfig `json:"providers" yaml:"providers" mapstructure:"providers"`
 
+	// CredentialsKey encrypts provider credentials at rest: 32 bytes,
+	// standard base64. Without it credentials are stored in plaintext, and
+	// the dashboard says so. Supports ${ENV} interpolation.
+	CredentialsKey string `json:"credentials_key" yaml:"credentials_key" mapstructure:"credentials_key"`
+
+	// CredentialsKeyID is stored beside every value the key encrypts
+	// (default "k1"). Change it when you rotate to a new key.
+	CredentialsKeyID string `json:"credentials_key_id" yaml:"credentials_key_id" mapstructure:"credentials_key_id"`
+
+	// PreviousCredentialsKeys only decrypt, so values written under an older
+	// key keep working after a rotation.
+	PreviousCredentialsKeys []CredentialKeyConfig `json:"previous_credentials_keys" yaml:"previous_credentials_keys" mapstructure:"previous_credentials_keys"`
+
 	// RequireConfig requires config to be present in YAML files.
 	// If true and no config is found, Register returns an error.
 	RequireConfig bool `json:"-" yaml:"-"`

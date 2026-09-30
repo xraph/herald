@@ -1,6 +1,8 @@
 package extension
 
 import (
+	"github.com/xraph/forge"
+
 	"github.com/xraph/herald"
 	"github.com/xraph/herald/driver"
 	"github.com/xraph/herald/store"
@@ -73,5 +75,14 @@ func WithGroveDatabase(name string) ExtOption {
 	return func(e *Extension) {
 		e.config.GroveDatabase = name
 		e.useGrove = true
+	}
+}
+
+// WithAPIMiddleware runs mw in front of every Herald REST route. Herald can't
+// know your auth scheme, so this is where you put it. Without it, startup
+// warns that the API is unauthenticated.
+func WithAPIMiddleware(mw ...forge.Middleware) ExtOption {
+	return func(e *Extension) {
+		e.apiMiddleware = append(e.apiMiddleware, mw...)
 	}
 }

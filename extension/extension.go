@@ -35,7 +35,7 @@ const ExtensionName = "herald"
 const ExtensionDescription = "Unified multi-channel notification delivery engine"
 
 // ExtensionVersion is the semantic version.
-const ExtensionVersion = "0.1.0"
+const ExtensionVersion = "1.7.0"
 
 // Ensure Extension implements forge.Extension at compile time.
 var _ forge.Extension = (*Extension)(nil)
@@ -51,6 +51,9 @@ type Extension struct {
 	api      *api.ForgeAPI
 	opts     []herald.Option
 	useGrove bool
+
+	apiMiddleware []forge.Middleware
+	apiProtected  bool
 }
 
 // New creates a Herald Forge extension with the given options.
@@ -135,6 +138,12 @@ func (e *Extension) Init(fapp forge.App) error {
 	heraldOpts = append(heraldOpts, e.opts...)
 	heraldOpts = append(heraldOpts, e.config.ToHeraldOptions()...)
 
+	credOpts, err := e.config.credentialOptions()
+	if err != nil {
+		return err
+	}
+	heraldOpts = append(heraldOpts, credOpts...)
+
 	// Register built-in drivers.
 	heraldOpts = append(heraldOpts,
 		herald.WithDriver(&email.SMTPDriver{}),
@@ -147,7 +156,6 @@ func (e *Extension) Init(fapp forge.App) error {
 	// Herald core uses *slog.Logger; Forge provides forge.Logger.
 	// The core defaults to slog.Default() which is fine for extension use.
 
-	var err error
 	e.h, err = herald.New(heraldOpts...)
 	if err != nil {
 		return err
@@ -180,7 +188,7 @@ func (e *Extension) Init(fapp forge.App) error {
 		if basePath == "" {
 			basePath = "/herald"
 		}
-		e.api.RegisterRoutes(fapp.Router().Group(basePath))
+		e.apiProtected = mountAPI(fapp.Router(), e.api, basePath, e.apiMiddleware, e.Logger())
 	}
 
 	return nil
@@ -220,6 +228,10 @@ func (e *Extension) DashboardContributor() contributor.LocalContributor {
 func (e *Extension) RegisterRoutes(router forge.Router) {
 	e.api.RegisterRoutes(router)
 }
+
+// APIProtected reports whether the REST API was mounted behind middleware.
+// False also when routes are disabled and the host mounts them itself.
+func (e *Extension) APIProtected() bool { return e.apiProtected }
 
 // BasePath returns the configured URL base path.
 func (e *Extension) BasePath() string {
@@ -327,6 +339,14 @@ func (e *Extension) mergeConfigurations(yamlConfig, programmaticConfig Config) C
 	}
 	if programmaticConfig.DisableMigrate {
 		yamlConfig.DisableMigrate = true
+	}
+
+	if yamlConfig.CredentialsKey == "" && programmaticConfig.CredentialsKey != "" {
+		yamlConfig.CredentialsKey = programmaticConfig.CredentialsKey
+		yamlConfig.CredentialsKeyID = programmaticConfig.CredentialsKeyID
+	}
+	if len(yamlConfig.PreviousCredentialsKeys) == 0 {
+		yamlConfig.PreviousCredentialsKeys = programmaticConfig.PreviousCredentialsKeys
 	}
 
 	// String fields: YAML takes precedence.
