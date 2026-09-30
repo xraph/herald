@@ -20,9 +20,13 @@ import (
 
 // Driver delivers push notifications via the Apple Push Notification service (APNs) HTTP/2 API.
 type Driver struct {
-	mu       sync.Mutex
-	token    string
-	tokenExp time.Time
+	mu     sync.Mutex
+	tokens map[string]cachedToken // keyed by team ID and key ID
+}
+
+type cachedToken struct {
+	token string
+	exp   time.Time
 }
 
 var _ driver.Driver = (*Driver)(nil)
@@ -127,9 +131,11 @@ func (d *Driver) getOrRefreshToken(keyID, teamID string, key *ecdsa.PrivateKey) 
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	// APNs tokens are valid for up to 60 minutes; refresh at 50 minutes.
-	if d.token != "" && time.Now().Before(d.tokenExp) {
-		return d.token, nil
+	// APNs tokens are valid for up to 60 minutes; refresh at 50. One driver
+	// serves every APNs provider, so the cache is per key, never shared.
+	cacheKey := teamID + "/" + keyID
+	if c, ok := d.tokens[cacheKey]; ok && time.Now().Before(c.exp) {
+		return c.token, nil
 	}
 
 	token, err := generateJWT(keyID, teamID, key)
@@ -137,8 +143,10 @@ func (d *Driver) getOrRefreshToken(keyID, teamID string, key *ecdsa.PrivateKey) 
 		return "", err
 	}
 
-	d.token = token
-	d.tokenExp = time.Now().Add(50 * time.Minute)
+	if d.tokens == nil {
+		d.tokens = map[string]cachedToken{}
+	}
+	d.tokens[cacheKey] = cachedToken{token: token, exp: time.Now().Add(50 * time.Minute)}
 	return token, nil
 }
 

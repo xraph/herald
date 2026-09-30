@@ -4,8 +4,9 @@ import "github.com/xraph/herald/driver"
 
 var _ driver.Describer = (*Driver)(nil)
 
-// Fields describes what the webhook driver reads. Settings starting with
-// "data." are forwarded in the payload's data object (see Task 15).
+// Fields describes what the webhook driver reads. Settings whose key starts
+// with "data." are forwarded in the payload's data object, with the prefix
+// removed.
 func (d *Driver) Fields() []driver.Field {
 	return []driver.Field{
 		{Key: "url", Label: "Endpoint URL", Required: true, Secret: true, Help: "Often carries a token, so it's kept with the credentials.", Placement: driver.PlacementCredential},

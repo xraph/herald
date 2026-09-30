@@ -3,6 +3,7 @@ package discord_test
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -61,5 +62,21 @@ func TestDiscordValidate(t *testing.T) {
 	d := &discord.Driver{}
 	if err := d.Validate(map[string]string{}, nil); err == nil {
 		t.Error("expected error for missing webhook_url")
+	}
+}
+
+func TestDiscordKeepsTheWebhookQuery(t *testing.T) {
+	srv := drivertest.NewServer(t, http.StatusOK, `{"id":"m1"}`)
+	d := &discord.Driver{}
+	_, err := d.Send(context.Background(), &driver.OutboundMessage{
+		Text: "hi",
+		Data: map[string]string{"webhook_url": srv.URL + "/api/webhooks/1/tok?thread_id=9"},
+	})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	q, _ := url.ParseQuery(srv.Captured.Query)
+	if q.Get("thread_id") != "9" || q.Get("wait") != "true" {
+		t.Errorf("query = %q, want thread_id=9 and wait=true", srv.Captured.Query)
 	}
 }

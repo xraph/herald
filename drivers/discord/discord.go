@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/xraph/herald/driver"
@@ -66,7 +67,12 @@ func (d *Driver) Send(ctx context.Context, msg *driver.OutboundMessage) (*driver
 	// Discord requires ?wait=true to get back the message object.
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhookURL+"?wait=true", bytes.NewReader(body))
+	endpoint, err := withWait(webhookURL)
+	if err != nil {
+		// The URL embeds Discord's token, so the error must not repeat it.
+		return nil, fmt.Errorf("discord: webhook_url is not a valid URL")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("discord: create request: %w", err)
 	}
@@ -92,4 +98,17 @@ func (d *Driver) Send(ctx context.Context, msg *driver.OutboundMessage) (*driver
 		ProviderMessageID: result.ID,
 		Status:            message.StatusSent,
 	}, nil
+}
+
+// withWait adds wait=true, which makes Discord answer with the message it
+// created, keeping any query the webhook URL already has.
+func withWait(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	q := u.Query()
+	q.Set("wait", "true")
+	u.RawQuery = q.Encode()
+	return u.String(), nil
 }

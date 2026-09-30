@@ -74,7 +74,7 @@ func (d *Driver) Send(ctx context.Context, msg *driver.OutboundMessage) (*driver
 		Text:      msg.Text,
 		HTML:      msg.HTML,
 		Title:     msg.Title,
-		Data:      filterData(msg.Data),
+		Data:      driver.DataPayload(msg.Data),
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}
 	if payload.Event == "" {
@@ -142,23 +142,4 @@ func computeHMAC(payload []byte, secret string) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write(payload)
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
-}
-
-// filterData returns a copy of data excluding internal credential keys.
-func filterData(data map[string]string) map[string]string {
-	exclude := map[string]bool{
-		"url":            true,
-		"signing_secret": true,
-		"event_type":     true,
-	}
-	filtered := make(map[string]string)
-	for k, v := range data {
-		if !exclude[k] {
-			filtered[k] = v
-		}
-	}
-	if len(filtered) == 0 {
-		return nil
-	}
-	return filtered
 }

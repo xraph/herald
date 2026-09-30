@@ -46,3 +46,24 @@ func TestWebhookValidate(t *testing.T) {
 		t.Error("expected error for missing url")
 	}
 }
+
+func TestWebhookForwardsOnlyDataSettings(t *testing.T) {
+	srv := drivertest.NewServer(t, http.StatusOK, `{}`)
+	_, err := webhook.New(nil).Send(context.Background(), &driver.OutboundMessage{
+		To: "u1", Text: "hi",
+		Data: map[string]string{
+			"url": srv.URL, "signing_secret": "s", "event_type": "order.paid",
+			"from": "x@example.com", "api_key": "leaks-if-forwarded", "data.order": "1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	var body struct {
+		Data map[string]string `json:"data"`
+	}
+	srv.Captured.DecodeJSON(t, &body)
+	if len(body.Data) != 1 || body.Data["order"] != "1" {
+		t.Errorf("payload data = %v, want only order=1", body.Data)
+	}
+}

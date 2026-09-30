@@ -3,6 +3,7 @@ package push_test
 import (
 	"context"
 	"net/http"
+	"reflect"
 	"testing"
 
 	"github.com/xraph/herald/driver"
@@ -54,12 +55,14 @@ func TestFCMSendFiltersCredentials(t *testing.T) {
 	_, err := d.Send(context.Background(), &driver.OutboundMessage{
 		To: "device-token", Title: "Hi", Text: "body",
 		Data: map[string]string{
-			"project_id":   "p",
-			"access_token": "tok",
-			"server_key":   "sk",
-			"base_url":     srv.URL,
-			"order_id":     "42",
-			"deep_link":    "app://orders/42",
+			"project_id":     "p",
+			"access_token":   "tok",
+			"server_key":     "sk",
+			"base_url":       srv.URL,
+			"from":           "no-reply@example.com",
+			"username":       "leaks-if-forwarded",
+			"data.order_id":  "42",
+			"data.deep_link": "app://orders/42",
 		},
 	})
 	if err != nil {
@@ -72,16 +75,9 @@ func TestFCMSendFiltersCredentials(t *testing.T) {
 	}
 	srv.Captured.DecodeJSON(t, &body)
 
-	for _, k := range []string{"project_id", "access_token", "server_key", "base_url"} {
-		if _, ok := body.Message.Data[k]; ok {
-			t.Errorf("credential key %q leaked into message.data: %+v", k, body.Message.Data)
-		}
-	}
-	if body.Message.Data["order_id"] != "42" {
-		t.Errorf("custom data key order_id = %q, want %q", body.Message.Data["order_id"], "42")
-	}
-	if body.Message.Data["deep_link"] != "app://orders/42" {
-		t.Errorf("custom data key deep_link = %q, want %q", body.Message.Data["deep_link"], "app://orders/42")
+	want := map[string]string{"order_id": "42", "deep_link": "app://orders/42"}
+	if !reflect.DeepEqual(body.Message.Data, want) {
+		t.Errorf("message.data = %v, want only the data. settings %v", body.Message.Data, want)
 	}
 }
 

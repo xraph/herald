@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/smtp"
 	"strings"
+	"time"
 
 	"github.com/xraph/herald/driver"
 	"github.com/xraph/herald/message"
@@ -75,48 +76,77 @@ func (d *SMTPDriver) Send(ctx context.Context, msg *driver.OutboundMessage) (*dr
 			return nil, err
 		}
 	} else {
-		if err := smtp.SendMail(addr, auth, from, []string{msg.To}, []byte(body.String())); err != nil {
-			return nil, fmt.Errorf("smtp: send mail: %w", err)
+		if err := sendPlain(ctx, addr, host, from, []string{msg.To}, body.String(), auth); err != nil {
+			return nil, err
 		}
 	}
 
 	return &driver.DeliveryResult{Status: message.StatusSent}, nil
 }
 
-func sendWithTLS(ctx context.Context, addr, host, from string, to []string, body string, auth smtp.Auth) error {
-	tlsConfig := &tls.Config{
-		ServerName: host,
-		MinVersion: tls.VersionTLS12,
-	}
+// sendTimeout bounds a whole SMTP conversation when the caller's context has
+// no earlier deadline.
+const sendTimeout = 30 * time.Second
 
-	dialer := &tls.Dialer{Config: tlsConfig}
+// sendPlain does what smtp.SendMail does (STARTTLS when the server offers it,
+// then auth and delivery), but dials with ctx and bounds the conversation
+// with a deadline, so a server that stops answering can't hang a send.
+func sendPlain(ctx context.Context, addr, host, from string, to []string, body string, auth smtp.Auth) error {
+	var dialer net.Dialer
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
-		return fmt.Errorf("smtp: tls dial: %w", err)
+		return fmt.Errorf("smtp: dial: %w", err)
 	}
 	defer conn.Close()
-
+	if err = conn.SetDeadline(deadline(ctx)); err != nil {
+		return fmt.Errorf("smtp: set deadline: %w", err)
+	}
 	client, err := smtp.NewClient(conn, host)
 	if err != nil {
 		return fmt.Errorf("smtp: new client: %w", err)
 	}
 	defer client.Close()
-
-	if auth != nil {
-		if authErr := client.Auth(auth); authErr != nil {
-			return fmt.Errorf("smtp: auth: %w", authErr)
+	if ok, _ := client.Extension("STARTTLS"); ok {
+		if err := client.StartTLS(&tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}); err != nil {
+			return fmt.Errorf("smtp: starttls: %w", err)
 		}
 	}
+	return deliver(client, from, to, body, auth)
+}
 
-	if mailErr := client.Mail(from); mailErr != nil {
-		return fmt.Errorf("smtp: mail from: %w", mailErr)
+func sendWithTLS(ctx context.Context, addr, host, from string, to []string, body string, auth smtp.Auth) error {
+	dialer := &tls.Dialer{Config: &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return fmt.Errorf("smtp: tls dial: %w", err)
+	}
+	defer conn.Close()
+	if err = conn.SetDeadline(deadline(ctx)); err != nil {
+		return fmt.Errorf("smtp: set deadline: %w", err)
+	}
+	client, err := smtp.NewClient(conn, host)
+	if err != nil {
+		return fmt.Errorf("smtp: new client: %w", err)
+	}
+	defer client.Close()
+	return deliver(client, from, to, body, auth)
+}
+
+// deliver runs auth, MAIL, RCPT, DATA and QUIT on an open client.
+func deliver(client *smtp.Client, from string, to []string, body string, auth smtp.Auth) error {
+	if auth != nil {
+		if err := client.Auth(auth); err != nil {
+			return fmt.Errorf("smtp: auth: %w", err)
+		}
+	}
+	if err := client.Mail(from); err != nil {
+		return fmt.Errorf("smtp: mail from: %w", err)
 	}
 	for _, recipient := range to {
-		if rcptErr := client.Rcpt(recipient); rcptErr != nil {
-			return fmt.Errorf("smtp: rcpt to %s: %w", recipient, rcptErr)
+		if err := client.Rcpt(recipient); err != nil {
+			return fmt.Errorf("smtp: rcpt to %s: %w", recipient, err)
 		}
 	}
-
 	w, err := client.Data()
 	if err != nil {
 		return fmt.Errorf("smtp: data: %w", err)
@@ -127,6 +157,14 @@ func sendWithTLS(ctx context.Context, addr, host, from string, to []string, body
 	if err := w.Close(); err != nil {
 		return fmt.Errorf("smtp: close data: %w", err)
 	}
-
 	return client.Quit()
+}
+
+// deadline is the earlier of ctx's deadline and sendTimeout from now.
+func deadline(ctx context.Context) time.Time {
+	d := time.Now().Add(sendTimeout)
+	if c, ok := ctx.Deadline(); ok && c.Before(d) {
+		return c
+	}
+	return d
 }
