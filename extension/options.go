@@ -80,7 +80,12 @@ func WithGroveDatabase(name string) ExtOption {
 
 // WithAPIMiddleware runs mw in front of every Herald REST route. Herald can't
 // know your auth scheme, so this is where you put it. Without it, startup
-// warns that the API is unauthenticated.
+// warns that the API is unauthenticated. Tenant isolation rests on this
+// middleware too: it must bind each caller to the app_id they may use.
+//
+// It applies only to routes Herald mounts itself. A host that disables them
+// and mounts the API through Extension.RegisterRoutes gets no middleware from
+// Herald and must apply its own on that router.
 func WithAPIMiddleware(mw ...forge.Middleware) ExtOption {
 	return func(e *Extension) {
 		e.apiMiddleware = append(e.apiMiddleware, mw...)

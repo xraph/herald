@@ -17,6 +17,11 @@ This release hardens providers, stores, templates and the REST API. Some of it b
 - By-ID routes (providers, templates, versions and so on) take an optional `app_id`. A row that belongs to another app answers 404, the same as a row that doesn't exist. Leave `app_id` out and you mean the `""` app. List routes still require `app_id` and answer 400 without it. Their filters (`channel`, `status`) and paging (`offset`, `limit`) are optional, so `GET /v1/providers?app_id=app_a` lists every provider of the app.
 - The REST API answers 400, 404 and 409 where it used to answer 500 for bad input, missing rows and duplicates.
 - Template `category` and a version's `subject`, `html`, `text` and `title` are no longer required fields.
+- A routing rule (scoped config) can only name a provider of its own app, on the channel of the field it sits in. `PUT /v1/config/app`, `/org/:orgId` and `/user/:userId` answer 400 for anything else and store nothing. Rules already stored that break this are skipped at send time with a warning in the log, and the resolver falls through to the next scope.
+- The resolver returns a store failure instead of treating it as "no rule here". If the database is down while `Send` looks up a routing rule, you get that error back, not a send through the fallback provider.
+- `GetPreference` and `GetScopedConfig` on the SQLite, Postgres and Mongo stores return `ErrPreferenceNotFound` and `ErrScopedConfigNotFound` for a missing row. They used to return `(nil, nil)`, so if your code only checked for a nil result, check the error now.
+- The memory store's update and delete of a row that doesn't exist return the not-found sentinel. They used to succeed and do nothing.
+- `Send` no longer reports every template load failure as `ErrTemplateNotFound`. A template that isn't there still is one. Anything else, a database error say, comes back as itself, wrapped with the template slug.
 
 ### Stores
 
@@ -31,6 +36,8 @@ The same conformance suite now runs against all four backends. It runs the Postg
 ### Provider credentials
 
 - Herald can encrypt credentials at rest. Set `credentials_key` (32 bytes, standard base64) and optionally `credentials_key_id`. Each value is encrypted on its own and carries its key ID, so `previous_credentials_keys` keeps old values readable while you rotate.
+- At startup the extension tells you whether credentials are encrypted. With `credentials_key` set it logs an Info line naming the key ID. Without it, it warns that provider credentials are stored in plaintext. Key material never reaches the log.
+- A stored value that has the encrypted prefix but can't be read (`credential.ErrMalformed`) answers 400 over REST, not 500.
 - Credentials are decrypted at send time and nowhere else. If a provider's credentials were encrypted under a key that's no longer configured, `UpdateProvider` refuses with `ErrCredentialKeyUnavailable` and leaves the stored row alone.
 - Turning the key on doesn't touch what's already stored. Run `EncryptStoredCredentials(ctx, appID)` (or `POST /v1/providers/encrypt`) once for each app to encrypt its existing rows. A second run changes nothing.
 - The templ dashboard creates providers through the engine too, so they're validated and encrypted like any other. Rows it wrote before this release are still plaintext, and the one `EncryptStoredCredentials` run after you upgrade picks them up.
@@ -47,9 +54,11 @@ The same conformance suite now runs against all four backends. It runs the Postg
 
 `extension.WithAPIMiddleware` puts your middleware in front of Herald's routes. It applies them with `group.Use`. We don't use forge's `WithGroupMiddleware` or `WithGroupAuth`: neither guards routes in a sub-group, and `WithGroupAuth` only writes OpenAPI metadata, so a route could look protected and not be. That's also why there's no `api_auth_providers` setting.
 
+Tenant isolation on the REST API rests on that middleware. Herald takes `app_id` from the request as given, so your middleware has to bind each caller to the app they're allowed to use. If you turn Herald's routes off and mount them yourself through `Extension.RegisterRoutes`, none of this runs and you need to put your own middleware on that router.
+
 ### Drivers
 
-- APNs caches its JWT per team ID and key ID. One driver serves every APNs provider, and before this they shared a single token.
+- APNs caches its JWT per signing key: team ID, key ID and a SHA-256 fingerprint of the public key. One driver serves every APNs provider, and before this they shared a single token. The IDs alone weren't enough, because they're settings anyone editing a provider can type, and a corrected `.p8` under the same key ID would have kept the old token.
 - SMTP dials with the send's context and puts a 30 second deadline on the whole conversation (or the context's own deadline, if that comes sooner), so a server that stops answering can't hang a send.
 - Discord keeps the query string already on your webhook URL when it adds `wait=true`.
 - Discord, Slack and webhook errors no longer contain the webhook URL, which carries its token.

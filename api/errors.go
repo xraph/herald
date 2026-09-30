@@ -7,6 +7,7 @@ import (
 	"github.com/xraph/forge"
 
 	"github.com/xraph/herald"
+	"github.com/xraph/herald/credential"
 	"github.com/xraph/herald/store"
 )
 
@@ -24,7 +25,7 @@ func mapError(err error) error {
 	case isAny(err, herald.ErrInvalidProvider, herald.ErrInvalidChannel, herald.ErrDriverNotFound,
 		herald.ErrNoProviderConfigured, herald.ErrTemplateDisabled, herald.ErrNoVersionForLocale,
 		herald.ErrMissingRequiredVariable, herald.ErrTemplateRenderFailed,
-		herald.ErrNoCredentialKey, herald.ErrCredentialKeyUnavailable):
+		herald.ErrNoCredentialKey, herald.ErrCredentialKeyUnavailable, credential.ErrMalformed):
 		return forge.BadRequest(err.Error())
 	default:
 		return forge.InternalError(err)

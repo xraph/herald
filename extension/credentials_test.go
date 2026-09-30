@@ -2,8 +2,11 @@ package extension
 
 import (
 	"encoding/base64"
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/xraph/forge"
 
 	"github.com/xraph/herald"
 	"github.com/xraph/herald/store/memory"
@@ -53,5 +56,37 @@ func TestBadKeysNameTheSettingNotTheValue(t *testing.T) {
 	_, err = Config{PreviousCredentialsKeys: []CredentialKeyConfig{{ID: "k0", Key: b64(32)}}}.credentialOptions()
 	if err == nil {
 		t.Error("previous keys with no current key were accepted")
+	}
+}
+
+// recordingLogger keeps what Info and Warn were asked to log.
+type recordingLogger struct {
+	forge.Logger
+	lines []string
+}
+
+func (r *recordingLogger) record(level, msg string, fields []forge.Field) {
+	line := level + " " + msg
+	for _, f := range fields {
+		line += fmt.Sprintf(" %s=%v", f.Key(), f.Value())
+	}
+	r.lines = append(r.lines, line)
+}
+
+func (r *recordingLogger) Info(msg string, fields ...forge.Field) { r.record("INFO", msg, fields) }
+func (r *recordingLogger) Warn(msg string, fields ...forge.Field) { r.record("WARN", msg, fields) }
+
+func TestStartupSaysWhetherCredentialsAreEncrypted(t *testing.T) {
+	keyed := &recordingLogger{Logger: forge.NewNoopLogger()}
+	logCredentialKey(keyed, "prod-2")
+	if len(keyed.lines) != 1 || !strings.HasPrefix(keyed.lines[0], "INFO ") || !strings.Contains(keyed.lines[0], "key_id=prod-2") {
+		t.Errorf("with a key: %q", keyed.lines)
+	}
+
+	plain := &recordingLogger{Logger: forge.NewNoopLogger()}
+	logCredentialKey(plain, "")
+	if len(plain.lines) != 1 || !strings.HasPrefix(plain.lines[0], "WARN ") ||
+		!strings.Contains(plain.lines[0], "plaintext") || !strings.Contains(plain.lines[0], "credentials_key") {
+		t.Errorf("without a key: %q", plain.lines)
 	}
 }

@@ -314,3 +314,18 @@ func TestEncryptRoute(t *testing.T) {
 		t.Errorf("report = %+v", rep)
 	}
 }
+
+func TestMalformedStoredCredentialIsABadRequest(t *testing.T) {
+	x := newHarness(t)
+	p := &provider.Provider{
+		ID: id.NewProviderID(), AppID: "app_a", Name: "damaged", Channel: "email", Driver: "resend",
+		Credentials: map[string]string{"api_key": "enc:v1:k1:not-base64!"}, Enabled: true,
+	}
+	if err := x.st.CreateProvider(t.Context(), p); err != nil {
+		t.Fatal(err)
+	}
+	rec := x.do(t, http.MethodPut, "/v1/providers/"+p.ID.String()+"?app_id=app_a", map[string]any{"name": "renamed"})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("update over a malformed credential = %d %s, want 400", rec.Code, rec.Body)
+	}
+}

@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/xraph/forge"
+
 	"github.com/xraph/herald"
 	"github.com/xraph/herald/credential"
 )
@@ -40,4 +42,18 @@ func (c Config) credentialOptions() ([]herald.Option, error) {
 		opts = append(opts, herald.WithPreviousCredentialKey(pk.ID, b))
 	}
 	return opts, nil
+}
+
+// logCredentialKey says at startup whether provider credentials are encrypted
+// at rest. It names the key ID and never logs key material. A standalone Init
+// before Register has no logger yet, so nil logs nothing.
+func logCredentialKey(logger forge.Logger, keyID string) {
+	if logger == nil {
+		return
+	}
+	if keyID != "" {
+		logger.Info("herald: provider credentials are encrypted at rest", forge.F("key_id", keyID))
+		return
+	}
+	logger.Warn("herald: provider credentials are stored in plaintext; set credentials_key to encrypt them")
 }

@@ -160,6 +160,7 @@ func (e *Extension) Init(fapp forge.App) error {
 	if err != nil {
 		return err
 	}
+	logCredentialKey(e.Logger(), e.h.CredentialKeyID())
 
 	// Run migrations if not disabled.
 	if !e.config.DisableMigrate {
@@ -225,6 +226,8 @@ func (e *Extension) DashboardContributor() contributor.LocalContributor {
 
 // RegisterRoutes registers all Herald API routes into a Forge router.
 // Use this for Forge extension integration where the parent app owns the router.
+// Middleware from WithAPIMiddleware is not applied here: guard router yourself
+// (router.Use, before calling this) or every route is open.
 func (e *Extension) RegisterRoutes(router forge.Router) {
 	e.api.RegisterRoutes(router)
 }
