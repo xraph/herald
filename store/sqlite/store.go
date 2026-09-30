@@ -280,7 +280,11 @@ func (s *Store) ListTemplates(ctx context.Context, appID string) ([]*template.Te
 	if err != nil {
 		return nil, err
 	}
-	return mapTemplates(models)
+	templates, err := mapTemplates(models)
+	if err != nil {
+		return nil, err
+	}
+	return templates, s.attachVersions(ctx, templates)
 }
 
 func (s *Store) ListTemplatesByChannel(ctx context.Context, appID string, channel string) ([]*template.Template, error) {
@@ -293,7 +297,11 @@ func (s *Store) ListTemplatesByChannel(ctx context.Context, appID string, channe
 	if err != nil {
 		return nil, err
 	}
-	return mapTemplates(models)
+	templates, err := mapTemplates(models)
+	if err != nil {
+		return nil, err
+	}
+	return templates, s.attachVersions(ctx, templates)
 }
 
 func mapTemplates(models []templateModel) ([]*template.Template, error) {
@@ -306,6 +314,42 @@ func mapTemplates(models []templateModel) ([]*template.Template, error) {
 		result[i] = t
 	}
 	return result, nil
+}
+
+// attachVersions loads the versions of every template in one query and hangs
+// them on their templates, locale ascending.
+func (s *Store) attachVersions(ctx context.Context, templates []*template.Template) error {
+	if len(templates) == 0 {
+		return nil
+	}
+	ids := make([]string, len(templates))
+	byID := make(map[string]*template.Template, len(templates))
+	for i, t := range templates {
+		ids[i] = t.ID.String()
+		byID[ids[i]] = t
+	}
+	args := make([]any, len(ids))
+	for i, x := range ids {
+		args[i] = x
+	}
+	var models []templateVersionModel
+	err := s.sdb.NewSelect(&models).
+		Where("template_id IN ("+strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")+")", args...).
+		OrderExpr("template_id ASC, locale ASC").
+		Scan(ctx)
+	if err != nil {
+		return err
+	}
+	for i := range models {
+		v, err := fromVersionModel(&models[i])
+		if err != nil {
+			return err
+		}
+		if t := byID[v.TemplateID.String()]; t != nil {
+			t.Versions = append(t.Versions, *v)
+		}
+	}
+	return nil
 }
 
 // ==================== Version Store ====================
@@ -661,6 +705,8 @@ func (s *Store) SetScopedConfig(ctx context.Context, cfg *scope.Config) error {
 		Set("email_provider_id = EXCLUDED.email_provider_id").
 		Set("sms_provider_id = EXCLUDED.sms_provider_id").
 		Set("push_provider_id = EXCLUDED.push_provider_id").
+		Set("webhook_provider_id = EXCLUDED.webhook_provider_id").
+		Set("chat_provider_id = EXCLUDED.chat_provider_id").
 		Set("from_email = EXCLUDED.from_email").
 		Set("from_name = EXCLUDED.from_name").
 		Set("from_phone = EXCLUDED.from_phone").

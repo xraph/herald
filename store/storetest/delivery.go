@@ -26,6 +26,17 @@ func testRecordDelivery(t *testing.T, s store.Store) {
 		t.Errorf("sent_at: got %v, want %v", got.SentAt, sentAt)
 	}
 
+	// Every field is written, so an empty value clears what was there.
+	must(t, "record retry failure", s.RecordDelivery(ctx, m.ID, message.Delivery{
+		Status: message.StatusFailed, Error: "retry failed",
+	}))
+	cleared, err := s.GetMessage(ctx, m.ID)
+	must(t, "get cleared message", err)
+	if cleared.Status != message.StatusFailed || cleared.SentAt != nil || cleared.ProviderMessageID != "" {
+		t.Errorf("after retry failure: status=%q sent_at=%v vendor=%q, want failed, nil, empty",
+			cleared.Status, cleared.SentAt, cleared.ProviderMessageID)
+	}
+
 	failed := newMessage("app_a", "sms", message.StatusSending, Base)
 	must(t, "create failing message", s.CreateMessage(ctx, failed))
 	must(t, "record failure", s.RecordDelivery(ctx, failed.ID, message.Delivery{

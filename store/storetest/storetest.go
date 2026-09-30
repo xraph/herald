@@ -29,4 +29,7 @@ func Run(t *testing.T, open Opener) {
 	t.Run("MessagePaging", func(t *testing.T) { testMessagePaging(t, open(t)) })
 	t.Run("RecordDelivery", func(t *testing.T) { testRecordDelivery(t, open(t)) })
 	t.Run("CountMessages", func(t *testing.T) { testCountMessages(t, open(t)) })
+	t.Run("ListTemplatesCarryVersions", func(t *testing.T) { testListTemplatesCarryVersions(t, open(t)) })
+	t.Run("ScopedConfigUpsert", func(t *testing.T) { testScopedConfigUpsert(t, open(t)) })
+	t.Run("PreferenceUpsert", func(t *testing.T) { testPreferenceUpsert(t, open(t)) })
 }

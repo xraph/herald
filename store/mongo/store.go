@@ -332,7 +332,11 @@ func (s *Store) ListTemplates(ctx context.Context, appID string) ([]*template.Te
 	if err != nil {
 		return nil, fmt.Errorf("herald/mongo: list templates: %w", err)
 	}
-	return mapTemplates(models)
+	templates, err := mapTemplates(models)
+	if err != nil {
+		return nil, err
+	}
+	return templates, s.attachVersions(ctx, templates)
 }
 
 func (s *Store) ListTemplatesByChannel(ctx context.Context, appID string, channel string) ([]*template.Template, error) {
@@ -344,7 +348,11 @@ func (s *Store) ListTemplatesByChannel(ctx context.Context, appID string, channe
 	if err != nil {
 		return nil, fmt.Errorf("herald/mongo: list templates by channel: %w", err)
 	}
-	return mapTemplates(models)
+	templates, err := mapTemplates(models)
+	if err != nil {
+		return nil, err
+	}
+	return templates, s.attachVersions(ctx, templates)
 }
 
 func mapTemplates(models []templateModel) ([]*template.Template, error) {
@@ -357,6 +365,38 @@ func mapTemplates(models []templateModel) ([]*template.Template, error) {
 		result[i] = t
 	}
 	return result, nil
+}
+
+// attachVersions loads the versions of every template in one query and hangs
+// them on their templates, locale ascending.
+func (s *Store) attachVersions(ctx context.Context, templates []*template.Template) error {
+	if len(templates) == 0 {
+		return nil
+	}
+	ids := make([]string, len(templates))
+	byID := make(map[string]*template.Template, len(templates))
+	for i, t := range templates {
+		ids[i] = t.ID.String()
+		byID[ids[i]] = t
+	}
+	var models []templateVersionModel
+	err := s.mdb.NewFind(&models).
+		Filter(bson.M{"template_id": bson.M{"$in": ids}}).
+		Sort(bson.D{{Key: "template_id", Value: 1}, {Key: "locale", Value: 1}}).
+		Scan(ctx)
+	if err != nil {
+		return fmt.Errorf("herald/mongo: attach versions: %w", err)
+	}
+	for i := range models {
+		v, err := fromVersionModel(&models[i])
+		if err != nil {
+			return err
+		}
+		if t := byID[v.TemplateID.String()]; t != nil {
+			t.Versions = append(t.Versions, *v)
+		}
+	}
+	return nil
 }
 
 // ==================== Version Store ====================

@@ -481,7 +481,13 @@ func (s *Store) GetPreference(_ context.Context, appID, userID string) (*prefere
 func (s *Store) SetPreference(_ context.Context, p *preference.Preference) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.preferences[p.AppID+":"+p.UserID] = clonePreference(p)
+	key := p.AppID + ":" + p.UserID
+	c := clonePreference(p)
+	if existing, ok := s.preferences[key]; ok {
+		c.ID = existing.ID
+		c.CreatedAt = existing.CreatedAt
+	}
+	s.preferences[key] = c
 	return nil
 }
 
@@ -509,7 +515,12 @@ func (s *Store) SetScopedConfig(_ context.Context, cfg *scope.Config) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := cfg.AppID + ":" + string(cfg.Scope) + ":" + cfg.ScopeID
-	s.scopedConfigs[key] = cloneScopedConfig(cfg)
+	c := cloneScopedConfig(cfg)
+	if existing, ok := s.scopedConfigs[key]; ok {
+		c.ID = existing.ID
+		c.CreatedAt = existing.CreatedAt
+	}
+	s.scopedConfigs[key] = c
 	return nil
 }
 
