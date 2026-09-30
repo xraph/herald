@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,8 +13,10 @@ import (
 
 	"github.com/xraph/herald"
 	"github.com/xraph/herald/api"
+	"github.com/xraph/herald/driver"
 	"github.com/xraph/herald/driver/email"
 	"github.com/xraph/herald/id"
+	"github.com/xraph/herald/message"
 	"github.com/xraph/herald/provider"
 	"github.com/xraph/herald/store/memory"
 )
@@ -25,11 +28,27 @@ type harness struct {
 	st      *memory.Store
 }
 
+// stubDriver stands in for the webhook and chat drivers, which live in their
+// own modules.
+type stubDriver struct{ name, channel string }
+
+func (d stubDriver) Name() string                          { return d.name }
+func (d stubDriver) Channel() string                       { return d.channel }
+func (d stubDriver) Validate(_, _ map[string]string) error { return nil }
+func (d stubDriver) Send(context.Context, *driver.OutboundMessage) (*driver.DeliveryResult, error) {
+	return &driver.DeliveryResult{Status: message.StatusSent}, nil
+}
+
 func newHarness(t *testing.T) *harness {
 	t.Helper()
+	return buildHarness(t, herald.WithCredentialKey("k1", bytes.Repeat([]byte{7}, 32)))
+}
+
+func buildHarness(t *testing.T, opts ...herald.Option) *harness {
+	t.Helper()
 	st := memory.New()
-	h, err := herald.New(herald.WithStore(st), herald.WithDriver(&email.ResendDriver{}),
-		herald.WithCredentialKey("k1", bytes.Repeat([]byte{7}, 32)))
+	h, err := herald.New(append([]herald.Option{herald.WithStore(st), herald.WithDriver(&email.ResendDriver{}),
+		herald.WithDriver(stubDriver{"hook", "webhook"}), herald.WithDriver(stubDriver{"talk", "chat"})}, opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,16 +192,60 @@ func TestVersionMustBelongToTheTemplateInThePath(t *testing.T) {
 	}
 }
 
+func (x *harness) createStubProvider(t *testing.T, appID, channel, driverName string) string {
+	t.Helper()
+	rec := x.do(t, http.MethodPost, "/v1/providers", map[string]any{
+		"app_id": appID, "name": driverName, "channel": channel, "driver": driverName, "enabled": true,
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create %s provider: %d %s", channel, rec.Code, rec.Body)
+	}
+	return decode[api.ProviderResponse](t, rec).ID
+}
+
 func TestScopedConfigReturnsTheStoredRow(t *testing.T) {
 	x := newHarness(t)
-	body := map[string]any{"app_id": "app_a", "webhook_provider_id": "hpvd_w", "chat_provider_id": "hpvd_c"}
-	first := decode[map[string]any](t, x.do(t, http.MethodPut, "/v1/config/app", body))
-	second := decode[map[string]any](t, x.do(t, http.MethodPut, "/v1/config/app", body))
-	if first["id"] != second["id"] {
-		t.Errorf("upsert answered two different IDs: %v, %v", first["id"], second["id"])
+	hook := x.createStubProvider(t, "app_a", "webhook", "hook")
+	talk := x.createStubProvider(t, "app_a", "chat", "talk")
+	body := map[string]any{"app_id": "app_a", "webhook_provider_id": hook, "chat_provider_id": talk}
+	first := x.do(t, http.MethodPut, "/v1/config/app", body)
+	if first.Code != http.StatusOK {
+		t.Fatalf("set config: %d %s", first.Code, first.Body)
 	}
-	if second["webhook_provider_id"] != "hpvd_w" || second["chat_provider_id"] != "hpvd_c" {
+	second := decode[map[string]any](t, x.do(t, http.MethodPut, "/v1/config/app", body))
+	if decode[map[string]any](t, first)["id"] != second["id"] {
+		t.Errorf("upsert answered two different IDs: %s, %v", first.Body, second["id"])
+	}
+	if second["webhook_provider_id"] != hook || second["chat_provider_id"] != talk {
 		t.Errorf("webhook/chat not stored: %+v", second)
+	}
+}
+
+func TestScopedConfigRefusesProvidersItCannotUse(t *testing.T) {
+	x := newHarness(t)
+	theirs := x.createProvider(t, "app_b").ID
+	mine := x.createProvider(t, "app_a").ID
+	cases := []struct {
+		name, path string
+		body       map[string]any
+	}{
+		{"another app's provider", "/v1/config/app", map[string]any{"app_id": "app_a", "email_provider_id": theirs}},
+		{"another app's provider on an org rule", "/v1/config/org/org_1", map[string]any{"app_id": "app_a", "email_provider_id": theirs}},
+		{"another app's provider on a user rule", "/v1/config/user/u1", map[string]any{"app_id": "app_a", "email_provider_id": theirs}},
+		{"an email provider in the sms slot", "/v1/config/app", map[string]any{"app_id": "app_a", "sms_provider_id": mine}},
+		{"a provider that doesn't exist", "/v1/config/app", map[string]any{"app_id": "app_a", "chat_provider_id": id.NewProviderID().String()}},
+		{"a malformed ID", "/v1/config/app", map[string]any{"app_id": "app_a", "push_provider_id": "hpvd_w"}},
+	}
+	for _, c := range cases {
+		if rec := x.do(t, http.MethodPut, c.path, c.body); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: %d %s, want 400", c.name, rec.Code, rec.Body)
+		}
+	}
+	if configs, err := x.st.ListScopedConfigs(t.Context(), "app_a"); err != nil || len(configs) != 0 {
+		t.Errorf("refused writes stored %d configs (err %v)", len(configs), err)
+	}
+	if rec := x.do(t, http.MethodPut, "/v1/config/app", map[string]any{"app_id": "app_a", "email_provider_id": mine}); rec.Code != http.StatusOK {
+		t.Errorf("app_a's own email provider: %d %s", rec.Code, rec.Body)
 	}
 }
 
