@@ -165,10 +165,10 @@ func (c *Contributor) renderProviderCreate(ctx context.Context, appID string, pa
 
 		p.Credentials = parseKeyValueRows(params.FormData, "cred_key_", "cred_value_", 10)
 		p.Settings = parseKeyValueRows(params.FormData, "setting_key_", "setting_value_", 10)
-		p.CreatedAt = time.Now()
-		p.UpdatedAt = time.Now()
 
-		if err := c.h.Store().CreateProvider(ctx, p); err != nil {
+		// Through the engine, never straight to the store: it validates the
+		// provider and encrypts its credentials when a key is configured.
+		if err := c.h.CreateProvider(ctx, p); err != nil {
 			return pages.ProviderCreatePage(pages.ProviderCreateData{
 				Drivers:  drivers,
 				Channels: channels,
