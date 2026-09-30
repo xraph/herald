@@ -852,7 +852,7 @@ func (a *ForgeAPI) createVersion(ctx forge.Context, req *CreateVersionRequest) (
 	if err := a.store.CreateVersion(ctx.Context(), v); err != nil {
 		return nil, mapError(err)
 	}
-	a.herald.Audit(ctx.Context(), bridge.SeverityInfo, bridge.OutcomeSuccess, "template_version.create", "template_version", v.ID.String(), "", "", "template", map[string]string{
+	a.herald.Audit(ctx.Context(), bridge.SeverityInfo, bridge.OutcomeSuccess, "template_version.create", "template_version", v.ID.String(), "", t.AppID, "template", map[string]string{
 		"template_id": req.TemplateID, "locale": req.Locale,
 	})
 	if err := ctx.JSON(http.StatusCreated, v); err != nil {

@@ -14,8 +14,9 @@ import (
 
 // Every by-ID route loads the row and compares its app to app_id. A row from
 // another app is a 404, exactly like a row that doesn't exist, so a response
-// never confirms that an ID exists elsewhere. An absent app_id means the ""
-// app, the same exact match every list route already uses.
+// never confirms that an ID exists elsewhere. An absent app_id on a by-ID route
+// means the "" app. List routes are stricter and still answer 400 when app_id
+// is missing.
 
 func parseProviderID(raw string) (id.ProviderID, error) {
 	pid, err := id.ParseProviderID(raw)
