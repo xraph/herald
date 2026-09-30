@@ -45,7 +45,7 @@ The memory store satisfies all six subsystem store interfaces plus the three lif
 |-----------|---------|---------|
 | `provider.Store` | `github.com/xraph/herald/provider` | `CreateProvider`, `GetProvider`, `UpdateProvider`, `DeleteProvider`, `ListProviders`, `ListAllProviders` |
 | `template.Store` | `github.com/xraph/herald/template` | `CreateTemplate`, `GetTemplate`, `GetTemplateBySlug`, `UpdateTemplate`, `DeleteTemplate`, `ListTemplates`, `ListTemplatesByChannel`, `CreateVersion`, `GetVersion`, `UpdateVersion`, `DeleteVersion`, `ListVersions` |
-| `message.Store` | `github.com/xraph/herald/message` | `CreateMessage`, `GetMessage`, `UpdateMessageStatus`, `ListMessages` |
+| `message.Store` | `github.com/xraph/herald/message` | `CreateMessage`, `GetMessage`, `RecordDelivery`, `ListMessages`, `CountMessages` |
 | `inbox.Store` | `github.com/xraph/herald/inbox` | `CreateNotification`, `GetNotification`, `DeleteNotification`, `MarkRead`, `MarkAllRead`, `UnreadCount`, `ListNotifications` |
 | `preference.Store` | `github.com/xraph/herald/preference` | `GetPreference`, `SetPreference`, `DeletePreference` |
 | `scope.Store` | `github.com/xraph/herald/scope` | `GetScopedConfig`, `SetScopedConfig`, `DeleteScopedConfig`, `ListScopedConfigs` |

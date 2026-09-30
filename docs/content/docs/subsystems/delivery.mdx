@@ -148,11 +148,14 @@ _ = h.store.CreateMessage(ctx, msg)
 
 result, sendErr := drv.Send(ctx, outbound)
 
+var d message.Delivery
 if sendErr != nil {
-    _ = h.store.UpdateMessageStatus(ctx, msg.ID, message.StatusFailed, sendErr.Error())
+    d = message.Delivery{Status: message.StatusFailed, Error: sendErr.Error()}
 } else {
-    _ = h.store.UpdateMessageStatus(ctx, msg.ID, message.StatusSent, "")
+    sentAt := time.Now().UTC()
+    d = message.Delivery{Status: message.StatusSent, SentAt: &sentAt, ProviderMessageID: result.ProviderMessageID}
 }
+_ = h.store.RecordDelivery(ctx, msg.ID, d)
 ```
 
 ### 7. Inbox Entry (In-App Channel)

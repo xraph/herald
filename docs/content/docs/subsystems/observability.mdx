@@ -129,7 +129,7 @@ Messages progress through a lifecycle of states:
 | `failed` | Delivery failed |
 | `bounced` | Recipient address bounced |
 
-The status is updated via `UpdateMessageStatus` as the delivery progresses:
+The outcome is written once with `RecordDelivery` when the send finishes:
 
 ```go
 // Before sending
@@ -137,11 +137,14 @@ msg.Status = message.StatusSending
 _ = h.store.CreateMessage(ctx, msg)
 
 // After driver returns
+var d message.Delivery
 if sendErr != nil {
-    _ = h.store.UpdateMessageStatus(ctx, msg.ID, message.StatusFailed, sendErr.Error())
+    d = message.Delivery{Status: message.StatusFailed, Error: sendErr.Error()}
 } else {
-    _ = h.store.UpdateMessageStatus(ctx, msg.ID, message.StatusSent, "")
+    sentAt := time.Now().UTC()
+    d = message.Delivery{Status: message.StatusSent, SentAt: &sentAt, ProviderMessageID: result.ProviderMessageID}
 }
+_ = h.store.RecordDelivery(ctx, msg.ID, d)
 ```
 
 ### Querying the Delivery Log
@@ -176,8 +179,9 @@ GET /herald/messages?app_id=app_01abc...&channel=email&status=failed&limit=20
 type Store interface {
     CreateMessage(ctx context.Context, m *Message) error
     GetMessage(ctx context.Context, messageID id.MessageID) (*Message, error)
-    UpdateMessageStatus(ctx context.Context, messageID id.MessageID, status Status, errMsg string) error
+    RecordDelivery(ctx context.Context, messageID id.MessageID, d Delivery) error
     ListMessages(ctx context.Context, appID string, opts ListOptions) ([]*Message, error)
+    CountMessages(ctx context.Context, appID string, since time.Time) ([]Count, error)
 }
 ```
 

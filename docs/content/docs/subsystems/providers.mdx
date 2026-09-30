@@ -195,7 +195,9 @@ req := &api.CreateProviderRequest{
 
 ## Driver Validation
 
-Each driver implements a `Validate` method that checks whether the provided credentials contain all required keys before the provider is used:
+Each driver implements a `Validate` method that checks whether the provided credentials contain all required keys.
+
+Herald calls `Validate` when a provider is created or updated through the engine (`CreateProvider`, `UpdateProvider`, and the REST API, which uses them), with credentials and settings merged the way `Send` merges them. Providers seeded from configuration are validated too, but a failure there is logged and the provider is still created, so a typo in `config.yaml` never stops your app from booting.
 
 ```go
 type Driver interface {
