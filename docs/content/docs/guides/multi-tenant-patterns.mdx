@@ -50,6 +50,8 @@ A common requirement is letting each organization use its own email provider (fo
 
 ### Step 1: Create providers for each org
 
+`h` is your `*herald.Herald`. `CreateProvider` validates a provider and encrypts its credentials, which a call on the store doesn't do.
+
 ```go
 // Acme Corp uses Amazon SES.
 acmeProvider := &provider.Provider{
@@ -59,19 +61,19 @@ acmeProvider := &provider.Provider{
     Channel: "email",
     Driver:  "smtp",
     Credentials: map[string]string{
-        "host":     "email-smtp.us-east-1.amazonaws.com",
-        "port":     "587",
         "username": "AKIA...",
         "password": "...",
     },
     Settings: map[string]string{
+        "host": "email-smtp.us-east-1.amazonaws.com",
+        "port": "587",
         "from": "noreply@acme.com",
     },
     Enabled:   true,
     CreatedAt: now,
     UpdatedAt: now,
 }
-_ = store.CreateProvider(ctx, acmeProvider)
+_ = h.CreateProvider(ctx, acmeProvider)
 
 // Globex uses Resend.
 globexProvider := &provider.Provider{
@@ -90,7 +92,7 @@ globexProvider := &provider.Provider{
     CreatedAt: now,
     UpdatedAt: now,
 }
-_ = store.CreateProvider(ctx, globexProvider)
+_ = h.CreateProvider(ctx, globexProvider)
 ```
 
 ### Step 2: Set org-scoped configuration

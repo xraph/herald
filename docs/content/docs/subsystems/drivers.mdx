@@ -84,17 +84,21 @@ When using Herald through the Forge extension, all built-in drivers are register
 
 ## Built-in Drivers
 
+Each table lists the keys a driver reads and where each one goes. A credential goes in the provider's `credentials`, which Herald encrypts at rest once you set a key, and a secret always belongs there. A setting goes in `settings` and stays readable. Herald refuses a provider that puts a setting in `credentials`, and it refuses `base_url` and `host` there for every driver. The tables follow each driver's `Fields()` method, which is where the placement comes from.
+
 ### SMTP
 
 The SMTP driver delivers email via standard SMTP protocol with optional TLS.
 
-| Credential | Required | Description |
-|-----------|----------|-------------|
-| `host` | Yes | SMTP server hostname |
-| `port` | Yes | SMTP server port (usually 25, 465, or 587) |
-| `username` | No | SMTP authentication username |
-| `password` | No | SMTP authentication password |
-| `use_tls` | No | Set to `"true"` for direct TLS connection |
+| Key | Goes in | Required | Secret | Description |
+|-----|---------|----------|--------|-------------|
+| `host` | Setting | Yes | No | SMTP server hostname |
+| `port` | Setting | Yes | No | SMTP server port (usually 25, 465, or 587) |
+| `use_tls` | Setting | No | No | Set to `"true"` for direct TLS connection |
+| `username` | Credential | No | No | SMTP authentication username |
+| `password` | Credential | No | Yes | SMTP authentication password |
+| `from` | Setting | No | No | From address, used when no routing rule sets one |
+| `from_name` | Setting | No | No | From display name |
 
 ```go
 driver := &email.SMTPDriver{}
@@ -121,10 +125,12 @@ if msg.HTML != "" {
 
 The Resend driver delivers email via the [Resend](https://resend.com) HTTP API.
 
-| Credential | Required | Description |
-|-----------|----------|-------------|
-| `api_key` | Yes | Resend API key |
-| `base_url` | No | API base URL (defaults to `https://api.resend.com`) |
+| Key | Goes in | Required | Secret | Description |
+|-----|---------|----------|--------|-------------|
+| `api_key` | Credential | Yes | Yes | Resend API key |
+| `base_url` | Setting | No | No | API base URL (defaults to `https://api.resend.com`) |
+| `from` | Setting | No | No | From address, used when no routing rule sets one |
+| `from_name` | Setting | No | No | From display name |
 
 ```go
 driver := &email.ResendDriver{}
@@ -151,11 +157,12 @@ type resendRequest struct {
 
 The Twilio driver delivers SMS via the [Twilio](https://www.twilio.com) REST API.
 
-| Credential | Required | Description |
-|-----------|----------|-------------|
-| `account_sid` | Yes | Twilio Account SID |
-| `auth_token` | Yes | Twilio Auth Token |
-| `from_number` | Yes | Sender phone number (E.164 format) |
+| Key | Goes in | Required | Secret | Description |
+|-----|---------|----------|--------|-------------|
+| `account_sid` | Credential | Yes | No | Twilio Account SID |
+| `auth_token` | Credential | Yes | Yes | Twilio Auth Token |
+| `from_number` | Setting | Yes | No | Sender phone number (E.164 format) |
+| `base_url` | Setting | No | No | API base URL (empty means Twilio's own API) |
 
 ```go
 driver := &sms.TwilioDriver{}
@@ -178,11 +185,12 @@ data.Set("Body", msg.Text)
 
 The FCM driver delivers push notifications via the [Firebase Cloud Messaging](https://firebase.google.com/docs/cloud-messaging) HTTP v1 API.
 
-| Credential | Required | Description |
-|-----------|----------|-------------|
-| `project_id` | Yes | Firebase project ID |
-| `access_token` | Conditional | OAuth2 access token (preferred) |
-| `server_key` | Conditional | Legacy server key (fallback) |
+| Key | Goes in | Required | Secret | Description |
+|-----|---------|----------|--------|-------------|
+| `project_id` | Setting | Yes | No | Firebase project ID |
+| `access_token` | Credential | Conditional | Yes | OAuth2 access token (preferred) |
+| `server_key` | Credential | Conditional | Yes | Legacy server key (fallback) |
+| `base_url` | Setting | No | No | API base URL (empty means Google's own API) |
 
 Either `access_token` or `server_key` must be provided.
 
@@ -212,9 +220,9 @@ If `access_token` is provided, it is sent as a Bearer token. Otherwise, the lega
 
 The InApp driver is a no-op pass-through. In-app notifications are handled directly by the Herald engine, which stores them in the inbox table after the driver returns success.
 
-| Credential | Required | Description |
-|-----------|----------|-------------|
-| *(none)* | -- | No credentials needed |
+| Key | Goes in | Required | Secret | Description |
+|-----|---------|----------|--------|-------------|
+| *(none)* | -- | -- | -- | Nothing to configure |
 
 ```go
 driver := &inapp.Driver{}
@@ -274,6 +282,15 @@ type SESDriver struct{}
 func (d *SESDriver) Name() string    { return "ses" }
 func (d *SESDriver) Channel() string { return "email" }
 
+// Fields says which keys the driver reads and where each one lives.
+func (d *SESDriver) Fields() []driver.Field {
+    return []driver.Field{
+        {Key: "access_key_id", Label: "Access key ID", Required: true, Placement: driver.PlacementCredential},
+        {Key: "secret_access_key", Label: "Secret access key", Required: true, Secret: true, Placement: driver.PlacementCredential},
+        {Key: "region", Label: "Region", Required: true, Placement: driver.PlacementSetting},
+    }
+}
+
 func (d *SESDriver) Validate(credentials, settings map[string]string) error {
     if credentials["access_key_id"] == "" {
         return fmt.Errorf("ses: missing required credential 'access_key_id'")
@@ -308,17 +325,22 @@ h, err := herald.New(
 )
 ```
 
-Then create a provider that uses the custom driver:
+`Fields` is optional, but it's what Herald checks placement against. A driver without it still can't take `base_url` or `host` in `credentials`, yet Herald can't tell which of its other keys are settings, so it can't refuse those.
+
+Then create a provider that uses the custom driver. The access keys go in `credentials` and the region goes in `settings`, matching the schema above:
 
 ```go
-provider := &provider.Provider{
+p := &provider.Provider{
     Name:    "Production SES",
     Channel: "email",
     Driver:  "ses",
     Credentials: map[string]string{
         "access_key_id":     "AKIA...",
         "secret_access_key": "secret...",
-        "region":            "us-east-1",
+    },
+    Settings: map[string]string{
+        "region": "us-east-1",
     },
 }
+err := h.CreateProvider(ctx, p)
 ```

@@ -53,18 +53,18 @@ const (
 
 ## Driver Configuration
 
-Each driver requires specific credentials and settings. These are stored as `map[string]string` on the provider.
+Each driver requires specific credentials and settings. These are stored as `map[string]string` on the provider. Secrets go in `credentials`, and everything else, connection targets like `host` and `base_url` included, goes in `settings`. Herald refuses a provider that puts a setting in `credentials`. The [Drivers](/docs/subsystems/drivers) page says which map each key of each driver belongs in.
 
 ### SMTP
 
 ```go
 Credentials: map[string]string{
-    "host":     "smtp.example.com",
-    "port":     "587",
     "username": "notifications@example.com",
     "password": "secret",
 },
 Settings: map[string]string{
+    "host":      "smtp.example.com",
+    "port":      "587",
     "use_tls":   "true",
     "from":      "noreply@example.com",
     "from_name": "My App",
@@ -89,6 +89,8 @@ Settings: map[string]string{
 Credentials: map[string]string{
     "account_sid": "AC...",
     "auth_token":  "auth_token_here",
+},
+Settings: map[string]string{
     "from_number": "+15551234567",
 },
 ```
@@ -97,10 +99,12 @@ Credentials: map[string]string{
 
 ```go
 Credentials: map[string]string{
-    "project_id":   "my-firebase-project",
     "access_token": "ya29.a0...",      // OAuth2 access token
     // OR legacy:
     "server_key":   "AAAA...",         // legacy server key
+},
+Settings: map[string]string{
+    "project_id": "my-firebase-project",
 },
 ```
 

@@ -122,7 +122,8 @@ func main() {
         log.Fatal(err)
     }
 
-    // Create a provider.
+    // Create a provider through the engine, which validates it and
+    // encrypts its credentials. The store call skips both.
     now := time.Now().UTC()
     p := &provider.Provider{
         ID:      id.NewProviderID(),
@@ -130,7 +131,7 @@ func main() {
         Name:    "SMTP",
         Channel: "email",
         Driver:  "smtp",
-        Credentials: map[string]string{
+        Settings: map[string]string{
             "host": "smtp.example.com",
             "port": "587",
         },
@@ -138,7 +139,7 @@ func main() {
         CreatedAt: now,
         UpdatedAt: now,
     }
-    if err := store.CreateProvider(ctx, p); err != nil {
+    if err := h.CreateProvider(ctx, p); err != nil {
         log.Fatal(err)
     }
     fmt.Printf("Provider created: %s\n", p.ID)

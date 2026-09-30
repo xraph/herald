@@ -68,7 +68,7 @@ func main() {
     }
 
     // 3. Register an email provider with Resend credentials.
-    _ = store.CreateProvider(ctx, &provider.Provider{
+    _ = h.CreateProvider(ctx, &provider.Provider{
         ID:      id.NewProviderID(),
         AppID:   "myapp",
         Name:    "Resend Production",

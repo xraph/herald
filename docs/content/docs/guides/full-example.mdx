@@ -55,12 +55,12 @@ func main() {
         Channel: "email",
         Driver:  "smtp",
         Credentials: map[string]string{
-            "host":     "smtp.example.com",
-            "port":     "587",
             "username": "noreply@example.com",
             "password": "secret",
         },
         Settings: map[string]string{
+            "host":      "smtp.example.com",
+            "port":      "587",
             "from":      "noreply@example.com",
             "from_name": "My App",
         },
@@ -69,7 +69,7 @@ func main() {
         CreatedAt: now,
         UpdatedAt: now,
     }
-    if err := store.CreateProvider(ctx, emailProvider); err != nil {
+    if err := h.CreateProvider(ctx, emailProvider); err != nil {
         log.Fatal("create provider:", err)
     }
     fmt.Printf("[Provider] Created: %s (%s)\n", emailProvider.Name, emailProvider.ID)
@@ -85,7 +85,7 @@ func main() {
         CreatedAt: now,
         UpdatedAt: now,
     }
-    if err := store.CreateProvider(ctx, inappProvider); err != nil {
+    if err := h.CreateProvider(ctx, inappProvider); err != nil {
         log.Fatal("create inapp provider:", err)
     }
     fmt.Printf("[Provider] Created: %s (%s)\n", inappProvider.Name, inappProvider.ID)
@@ -355,7 +355,7 @@ func seedData(ctx context.Context, h *herald.Herald) error {
         Name:    "SMTP",
         Channel: "email",
         Driver:  "smtp",
-        Credentials: map[string]string{
+        Settings: map[string]string{
             "host": "smtp.example.com",
             "port": "587",
         },
@@ -363,7 +363,7 @@ func seedData(ctx context.Context, h *herald.Herald) error {
         CreatedAt: now,
         UpdatedAt: now,
     }
-    if err := store.CreateProvider(ctx, p); err != nil {
+    if err := h.CreateProvider(ctx, p); err != nil {
         log.Printf("provider may already exist: %v", err)
     }
 

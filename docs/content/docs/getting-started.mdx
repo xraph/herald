@@ -95,7 +95,7 @@ You only need to register drivers for the channels you plan to use. For example,
 
 ## Step 3 -- Register a provider
 
-A provider connects a channel to a driver with specific credentials. Create a provider in the store before sending notifications on that channel.
+A provider connects a channel to a driver with specific credentials. Create one before you send notifications on that channel. `CreateProvider` on the engine checks it against the driver and encrypts its credentials, so use that rather than the store.
 
 ```go
 import (
@@ -103,7 +103,7 @@ import (
     "github.com/xraph/herald/provider"
 )
 
-err = store.CreateProvider(ctx, &provider.Provider{
+err = h.CreateProvider(ctx, &provider.Provider{
     ID:      id.NewProviderID(),
     AppID:   "myapp",
     Name:    "Resend Production",
@@ -126,15 +126,17 @@ if err != nil {
 
 Each provider is scoped to an `AppID` and handles a single channel type. You can register multiple providers for the same channel -- the scope resolver picks the highest-priority enabled provider.
 
-### Provider credentials by driver
+### Provider keys by driver
 
-| Driver | Required credentials |
-|--------|---------------------|
-| `smtp` | `host`, `port`, `username` (optional), `password` (optional), `use_tls` (optional) |
-| `resend` | `api_key` |
-| `twilio` | `account_sid`, `auth_token`, `from_number` |
-| `fcm` | `server_key` or `access_token`, plus `project_id` |
-| `inapp` | None (in-app notifications are stored directly in the inbox) |
+Secrets go in `credentials`. Everything else goes in `settings`, and Herald refuses a provider that puts a setting in `credentials`. The [Drivers](/docs/subsystems/drivers) page lists every key.
+
+| Driver | Credentials | Settings |
+|--------|-------------|----------|
+| `smtp` | `username` (optional), `password` (optional) | `host`, `port`, `use_tls` (optional) |
+| `resend` | `api_key` | none required |
+| `twilio` | `account_sid`, `auth_token` | `from_number` |
+| `fcm` | `server_key` or `access_token` | `project_id` |
+| `inapp` | None (in-app notifications are stored directly in the inbox) | None |
 
 ## Step 4 -- Create a template
 
