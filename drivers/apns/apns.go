@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -21,7 +23,7 @@ import (
 // Driver delivers push notifications via the Apple Push Notification service (APNs) HTTP/2 API.
 type Driver struct {
 	mu     sync.Mutex
-	tokens map[string]cachedToken // keyed by team ID and key ID
+	tokens map[string]cachedToken // keyed by team ID, key ID and public key fingerprint
 }
 
 type cachedToken struct {
@@ -132,8 +134,17 @@ func (d *Driver) getOrRefreshToken(keyID, teamID string, key *ecdsa.PrivateKey) 
 	defer d.mu.Unlock()
 
 	// APNs tokens are valid for up to 60 minutes; refresh at 50. One driver
-	// serves every APNs provider, so the cache is per key, never shared.
-	cacheKey := teamID + "/" + keyID
+	// serves every APNs provider, so the cache is per signing key, never
+	// shared. Team ID and key ID are settings anyone editing a provider can
+	// type, so they alone would hand one tenant another's cached token, and
+	// keep a stale token after a corrected .p8. The public key fingerprint
+	// ties the entry to the key that signed it.
+	pub, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	if err != nil {
+		return "", fmt.Errorf("marshal public key: %w", err)
+	}
+	fingerprint := sha256.Sum256(pub)
+	cacheKey := teamID + "/" + keyID + "/" + hex.EncodeToString(fingerprint[:])
 	if c, ok := d.tokens[cacheKey]; ok && time.Now().Before(c.exp) {
 		return c.token, nil
 	}
