@@ -26,10 +26,20 @@ func NewResolver(scopeStore Store, providerStore provider.Store, logger *slog.Lo
 	}
 }
 
+// How a provider was chosen, reported in ResolveResult.Via.
+const (
+	ViaUser     = "user"     // a user-level routing rule
+	ViaOrg      = "org"      // an org-level routing rule
+	ViaApp      = "app"      // the app-level routing rule
+	ViaFallback = "fallback" // no rule: the first enabled provider by priority
+	ViaChosen   = "chosen"   // the caller named the provider
+)
+
 // ResolveResult holds the resolved provider and scoped configuration.
 type ResolveResult struct {
 	Provider *provider.Provider
 	Config   *Config
+	Via      string
 }
 
 // ResolveProvider resolves the best provider for a given channel through the
@@ -76,7 +86,7 @@ func (r *Resolver) ResolveProvider(
 				"channel", channel,
 				"app_id", appID,
 			)
-			return &ResolveResult{Provider: p}, nil
+			return &ResolveResult{Provider: p, Via: ViaFallback}, nil
 		}
 	}
 
@@ -110,5 +120,5 @@ func (r *Resolver) tryScope(ctx context.Context, appID string, scopeType ScopeTy
 		return nil
 	}
 
-	return &ResolveResult{Provider: prov, Config: cfg}
+	return &ResolveResult{Provider: prov, Config: cfg, Via: string(scopeType)}
 }

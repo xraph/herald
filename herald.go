@@ -7,8 +7,11 @@ package herald
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"maps"
 	"time"
+	"unicode/utf8"
 
 	"github.com/xraph/herald/bridge"
 	"github.com/xraph/herald/driver"
@@ -16,6 +19,7 @@ import (
 	"github.com/xraph/herald/inbox"
 	"github.com/xraph/herald/message"
 	"github.com/xraph/herald/provider"
+	"github.com/xraph/herald/scope"
 	"github.com/xraph/herald/template"
 )
 
@@ -34,6 +38,8 @@ type SendRequest struct {
 	Body     string            `json:"body,omitempty"`
 	Async    bool              `json:"async,omitempty"`
 	Metadata map[string]string `json:"metadata,omitempty"`
+	// ProviderID sends through this provider instead of resolving one. It must belong to AppID and handle Channel; a disabled provider is allowed, because naming it is the explicit act.
+	ProviderID string `json:"provider_id,omitempty"`
 }
 
 // NotifyRequest sends a notification across multiple channels using a template.
@@ -53,106 +59,57 @@ type NotifyRequest struct {
 
 // SendResult contains the outcome of a send operation.
 type SendResult struct {
-	MessageID  id.MessageID   `json:"message_id"`
-	Status     message.Status `json:"status"`
-	ProviderID string         `json:"provider_id,omitempty"`
-	Error      string         `json:"error,omitempty"`
+	MessageID id.MessageID   `json:"message_id"`
+	Status    message.Status `json:"status"`
+	// ProviderID is always Herald's provider ID.
+	ProviderID string `json:"provider_id,omitempty"`
+	// ProviderMessageID is the vendor's ID for the message, when it gave one.
+	ProviderMessageID string `json:"provider_message_id,omitempty"`
+	Error             string `json:"error,omitempty"`
+	// Logged is false when the message log couldn't be written. The send
+	// still happened; it just won't appear in the log.
+	Logged bool `json:"logged"`
 }
 
 // Send delivers a notification on a single channel.
 func (h *Herald) Send(ctx context.Context, req *SendRequest) (*SendResult, error) {
-	channel := req.Channel
-
-	// Check user preferences if user ID is provided
 	if req.UserID != "" && req.Template != "" {
-		pref, _ := h.store.GetPreference(ctx, req.AppID, req.UserID) //nolint:errcheck // preference lookup is optional
-		if pref != nil && pref.IsOptedOut(req.Template, channel) {
-			h.logger.Debug("herald: user opted out",
-				"user_id", req.UserID,
-				"template", req.Template,
-				"channel", channel,
-			)
-			return &SendResult{Status: message.StatusSent, Error: "user opted out"}, nil
+		pref, _ := h.store.GetPreference(ctx, req.AppID, req.UserID) //nolint:errcheck // no preference means opted in
+		if pref != nil && pref.IsOptedOut(req.Template, req.Channel) {
+			return h.suppress(ctx, req), nil
 		}
 	}
 
-	// Resolve template and render content
-	var rendered *template.RenderedContent
-	if req.Template != "" && req.Body == "" {
-		tmpl, err := h.store.GetTemplateBySlug(ctx, req.AppID, req.Template, channel)
-		if err != nil {
-			return nil, fmt.Errorf("%w: %w", ErrTemplateNotFound, err)
-		}
-		if !tmpl.Enabled {
-			return nil, ErrTemplateDisabled
-		}
-
-		locale := req.Locale
-		if locale == "" {
-			locale = h.config.DefaultLocale
-		}
-
-		rendered, err = h.renderer.Render(tmpl, locale, req.Data)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		rendered = &template.RenderedContent{
-			Subject: req.Subject,
-			Text:    req.Body,
-		}
+	rendered, err := h.renderRequest(ctx, req)
+	if err != nil {
+		return nil, err
 	}
 
-	// Resolve provider via scope chain
-	resolved, err := h.resolver.ResolveProvider(ctx, req.AppID, req.OrgID, req.UserID, channel)
-	if err != nil || resolved == nil {
-		return nil, fmt.Errorf("%w: channel=%s", ErrNoProviderConfigured, channel)
+	resolved, err := h.resolveForSend(ctx, req)
+	if err != nil {
+		return nil, err
 	}
-
 	prov := resolved.Provider
 
-	// Get the driver for this provider
 	drv, err := h.drivers.Get(prov.Driver)
 	if err != nil {
 		return nil, fmt.Errorf("%w: driver=%s", ErrDriverNotFound, prov.Driver)
 	}
 
-	// Build outbound message with provider credentials injected into Data
-	driverData := make(map[string]string)
-	for k, v := range prov.Credentials {
-		driverData[k] = v
-	}
-	for k, v := range prov.Settings {
-		driverData[k] = v
-	}
-
+	// A decryption failure is recorded on every message row below rather than
+	// returned, so the log says why nothing was delivered.
+	data, dataErr := h.driverData(prov)
 	outbound := &driver.OutboundMessage{
 		Subject: rendered.Subject,
 		HTML:    rendered.HTML,
 		Text:    rendered.Text,
 		Title:   rendered.Title,
-		Data:    driverData,
+		Data:    data,
 	}
+	applyFrom(outbound, resolved, req.Channel, prov)
 
-	// Set From fields from scoped config or provider settings
-	if resolved.Config != nil {
-		outbound.From = resolved.Config.FromEmail
-		outbound.FromName = resolved.Config.FromName
-		if channel == "sms" {
-			outbound.From = resolved.Config.FromPhone
-		}
-	}
-	if outbound.From == "" {
-		outbound.From = prov.Settings["from"]
-	}
-	if outbound.FromName == "" {
-		outbound.FromName = prov.Settings["from_name"]
-	}
-
-	// Create message log entry
 	now := time.Now().UTC()
 	results := make([]*SendResult, 0, len(req.To))
-
 	for _, recipient := range req.To {
 		msg := &message.Message{
 			ID:         id.NewMessageID(),
@@ -160,7 +117,7 @@ func (h *Herald) Send(ctx context.Context, req *SendRequest) (*SendResult, error
 			EnvID:      req.EnvID,
 			TemplateID: req.Template,
 			ProviderID: prov.ID.String(),
-			Channel:    channel,
+			Channel:    req.Channel,
 			Recipient:  recipient,
 			Subject:    rendered.Subject,
 			Body:       truncate(rendered.Text, h.config.TruncateBodyAt),
@@ -170,42 +127,31 @@ func (h *Herald) Send(ctx context.Context, req *SendRequest) (*SendResult, error
 			Attempts:   1,
 			CreatedAt:  now,
 		}
+		logged := h.logMessage(ctx, msg)
 
-		_ = h.store.CreateMessage(ctx, msg) //nolint:errcheck // best-effort delivery log
-
-		// Send via driver
-		outbound.To = recipient
-		result, sendErr := drv.Send(ctx, outbound)
-
-		if sendErr != nil {
-			msg.Status = message.StatusFailed
-			msg.Error = sendErr.Error()
-			_ = h.store.RecordDelivery(ctx, msg.ID, message.Delivery{ //nolint:errcheck // best-effort status update
-				Status: message.StatusFailed, Error: sendErr.Error(),
-			})
-
-			results = append(results, &SendResult{
-				MessageID:  msg.ID,
-				Status:     message.StatusFailed,
-				ProviderID: prov.ID.String(),
-				Error:      sendErr.Error(),
-			})
-			continue
+		var d message.Delivery
+		if dataErr != nil {
+			d = message.Delivery{Status: message.StatusFailed, Error: dataErr.Error()}
+		} else {
+			outbound.To = recipient
+			result, sendErr := drv.Send(ctx, outbound)
+			if sendErr != nil {
+				d = message.Delivery{Status: message.StatusFailed, Error: sendErr.Error()}
+			} else {
+				sentAt := time.Now().UTC()
+				d = message.Delivery{Status: message.StatusSent, SentAt: &sentAt}
+				if result != nil {
+					d.ProviderMessageID = result.ProviderMessageID
+				}
+			}
+		}
+		if logged {
+			if err := h.store.RecordDelivery(ctx, msg.ID, d); err != nil {
+				h.logger.Warn("herald: failed to record delivery", "message_id", msg.ID.String(), "error", err)
+			}
 		}
 
-		sentAt := time.Now().UTC()
-		msg.Status = message.StatusSent
-		msg.SentAt = &sentAt
-		providerMessageID := ""
-		if result != nil {
-			providerMessageID = result.ProviderMessageID
-		}
-		_ = h.store.RecordDelivery(ctx, msg.ID, message.Delivery{ //nolint:errcheck // best-effort status update
-			Status: message.StatusSent, ProviderMessageID: providerMessageID, SentAt: &sentAt,
-		})
-
-		// For in-app channel, also create inbox entry
-		if channel == string(ChannelInApp) && req.UserID != "" {
+		if d.Status == message.StatusSent && req.Channel == string(ChannelInApp) && req.UserID != "" {
 			_ = h.store.CreateNotification(ctx, &inbox.Notification{ //nolint:errcheck // best-effort inbox entry
 				ID:        id.NewInboxID(),
 				AppID:     req.AppID,
@@ -219,35 +165,164 @@ func (h *Herald) Send(ctx context.Context, req *SendRequest) (*SendResult, error
 			})
 		}
 
-		sr := &SendResult{
-			MessageID:  msg.ID,
-			Status:     message.StatusSent,
-			ProviderID: prov.ID.String(),
-		}
-		if result != nil && result.ProviderMessageID != "" {
-			sr.ProviderID = result.ProviderMessageID
-		}
-		results = append(results, sr)
+		results = append(results, &SendResult{
+			MessageID:         msg.ID,
+			Status:            d.Status,
+			ProviderID:        prov.ID.String(),
+			ProviderMessageID: d.ProviderMessageID,
+			Error:             d.Error,
+			Logged:            logged,
+		})
 	}
 
 	if len(results) == 0 {
 		return &SendResult{Status: message.StatusFailed, Error: "no recipients"}, nil
 	}
 
-	// Audit the send operation.
 	r := results[0]
 	outcome := bridge.OutcomeSuccess
 	if r.Status == message.StatusFailed {
 		outcome = bridge.OutcomeFailure
 	}
 	h.Audit(ctx, bridge.SeverityInfo, outcome, "notification.send", "message", r.MessageID.String(), req.UserID, req.AppID, "notification", map[string]string{
-		"channel":  channel,
+		"channel":  req.Channel,
 		"provider": prov.ID.String(),
+		"via":      resolved.Via,
 		"template": req.Template,
 		"status":   string(r.Status),
 	})
+	return r, nil
+}
 
-	return results[0], nil
+// ResolveProvider reports which provider would send on channel for this
+// app, org and user, and why. It returns nil, nil when nothing handles it.
+func (h *Herald) ResolveProvider(ctx context.Context, appID, orgID, userID, channel string) (*scope.ResolveResult, error) {
+	return h.resolver.ResolveProvider(ctx, appID, orgID, userID, channel)
+}
+
+// suppress records an opted-out send without calling any driver.
+func (h *Herald) suppress(ctx context.Context, req *SendRequest) *SendResult {
+	const reason = "user opted out"
+	now := time.Now().UTC()
+	var first *SendResult
+	for _, recipient := range req.To {
+		msg := &message.Message{
+			ID:         id.NewMessageID(),
+			AppID:      req.AppID,
+			EnvID:      req.EnvID,
+			TemplateID: req.Template,
+			Channel:    req.Channel,
+			Recipient:  recipient,
+			Status:     message.StatusSuppressed,
+			Error:      reason,
+			Metadata:   req.Metadata,
+			Async:      req.Async,
+			CreatedAt:  now,
+		}
+		logged := h.logMessage(ctx, msg)
+		if first == nil {
+			first = &SendResult{MessageID: msg.ID, Status: message.StatusSuppressed, Error: reason, Logged: logged}
+		}
+	}
+	if first == nil {
+		first = &SendResult{Status: message.StatusSuppressed, Error: reason}
+	}
+	h.Audit(ctx, bridge.SeverityInfo, bridge.OutcomeSuccess, "notification.suppressed", "message", first.MessageID.String(), req.UserID, req.AppID, "notification", map[string]string{
+		"channel": req.Channel, "template": req.Template,
+	})
+	return first
+}
+
+// logMessage writes the message row and reports whether it worked. A failed
+// write never blocks the send.
+func (h *Herald) logMessage(ctx context.Context, msg *message.Message) bool {
+	if err := h.store.CreateMessage(ctx, msg); err != nil {
+		h.logger.Warn("herald: could not write the message log; sending anyway",
+			"channel", msg.Channel, "status", string(msg.Status), "error", err)
+		return false
+	}
+	return true
+}
+
+// renderRequest renders the template, or uses the raw subject and body. A
+// template is used only when Template is set and Body is empty.
+func (h *Herald) renderRequest(ctx context.Context, req *SendRequest) (*template.RenderedContent, error) {
+	if req.Template == "" || req.Body != "" {
+		return &template.RenderedContent{Subject: req.Subject, Text: req.Body}, nil
+	}
+	tmpl, err := h.store.GetTemplateBySlug(ctx, req.AppID, req.Template, req.Channel)
+	if err != nil {
+		if errors.Is(err, ErrTemplateNotFound) {
+			return nil, fmt.Errorf("%w: %s on %s", ErrTemplateNotFound, req.Template, req.Channel)
+		}
+		return nil, fmt.Errorf("herald: load template %q: %w", req.Template, err)
+	}
+	if !tmpl.Enabled {
+		return nil, ErrTemplateDisabled
+	}
+	locale := req.Locale
+	if locale == "" {
+		locale = h.config.DefaultLocale
+	}
+	return h.renderer.Render(tmpl, locale, req.Data)
+}
+
+// resolveForSend returns the chosen provider when the request names one, and
+// otherwise runs the scope resolver.
+func (h *Herald) resolveForSend(ctx context.Context, req *SendRequest) (*scope.ResolveResult, error) {
+	if req.ProviderID == "" {
+		res, err := h.resolver.ResolveProvider(ctx, req.AppID, req.OrgID, req.UserID, req.Channel)
+		if err != nil {
+			return nil, err
+		}
+		if res == nil {
+			return nil, fmt.Errorf("%w: channel=%s", ErrNoProviderConfigured, req.Channel)
+		}
+		return res, nil
+	}
+	pid, err := id.ParseProviderID(req.ProviderID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %q", ErrProviderNotFound, req.ProviderID)
+	}
+	p, err := h.store.GetProvider(ctx, pid)
+	if err != nil {
+		return nil, err
+	}
+	if p.AppID != req.AppID {
+		return nil, ErrProviderNotFound
+	}
+	if p.Channel != req.Channel {
+		return nil, fmt.Errorf("%w: provider %s sends %s, not %s", ErrInvalidChannel, p.ID, p.Channel, req.Channel)
+	}
+	cfg, _ := h.store.GetScopedConfig(ctx, req.AppID, scope.ScopeApp, req.AppID) //nolint:errcheck // no app rule means provider settings supply From
+	return &scope.ResolveResult{Provider: p, Config: cfg, Via: scope.ViaChosen}, nil
+}
+
+// driverData is the map a driver reads: credentials, then settings, with
+// settings winning a key collision, which is how Send has always merged them.
+func (h *Herald) driverData(p *provider.Provider) (map[string]string, error) { //nolint:unparam // credential decryption lands here and can fail
+	data := make(map[string]string, len(p.Credentials)+len(p.Settings))
+	maps.Copy(data, p.Credentials)
+	maps.Copy(data, p.Settings)
+	return data, nil
+}
+
+// applyFrom sets the sender from the routing rule, falling back to the
+// provider's own from settings.
+func applyFrom(out *driver.OutboundMessage, res *scope.ResolveResult, channel string, prov *provider.Provider) {
+	if res.Config != nil {
+		out.From = res.Config.FromEmail
+		out.FromName = res.Config.FromName
+		if channel == string(ChannelSMS) {
+			out.From = res.Config.FromPhone
+		}
+	}
+	if out.From == "" {
+		out.From = prov.Settings["from"]
+	}
+	if out.FromName == "" {
+		out.FromName = prov.Settings["from_name"]
+	}
 }
 
 // Notify sends a notification across multiple channels using a template.
@@ -510,10 +585,15 @@ func (h *Herald) Audit(ctx context.Context, severity, outcome, action, resource,
 	}
 }
 
-// truncate shortens a string to maxLen characters.
+// truncate shortens s to at most maxLen bytes without splitting a UTF-8
+// character. maxLen <= 0 means no limit.
 func truncate(s string, maxLen int) string {
 	if maxLen <= 0 || len(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen]
+	cut := maxLen
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
