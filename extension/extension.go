@@ -9,7 +9,6 @@ import (
 
 	"github.com/xraph/chronicle"
 	"github.com/xraph/forge"
-	"github.com/xraph/forge/extensions/dashboard/contributor"
 	"github.com/xraph/grove"
 	"github.com/xraph/vessel"
 
@@ -17,7 +16,6 @@ import (
 	"github.com/xraph/herald/api"
 	"github.com/xraph/herald/bridge"
 	"github.com/xraph/herald/bridge/chronicleadapter"
-	heralddash "github.com/xraph/herald/dashboard"
 	"github.com/xraph/herald/driver/email"
 	"github.com/xraph/herald/driver/inapp"
 	"github.com/xraph/herald/driver/push"
@@ -215,13 +213,6 @@ func (e *Extension) Health(ctx context.Context) error {
 		return errors.New("herald extension not initialized")
 	}
 	return e.h.Store().Ping(ctx)
-}
-
-// DashboardContributor returns the Herald dashboard contributor for the Forge
-// dashboard extension. This provides the admin UI for managing providers,
-// templates, messages, and notification settings.
-func (e *Extension) DashboardContributor() contributor.LocalContributor {
-	return heralddash.New(heralddash.NewManifest(), e.h)
 }
 
 // RegisterRoutes registers all Herald API routes into a Forge router.
