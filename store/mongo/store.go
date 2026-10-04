@@ -563,7 +563,7 @@ func (s *Store) ListMessages(ctx context.Context, appID string, opts message.Lis
 
 	q := s.mdb.NewFind(&models).
 		Filter(filter).
-		Sort(bson.D{{Key: "created_at", Value: -1}})
+		Sort(bson.D{{Key: "created_at", Value: -1}, {Key: "_id", Value: -1}})
 
 	if opts.Limit > 0 {
 		q = q.Limit(int64(opts.Limit))
@@ -670,7 +670,7 @@ func (s *Store) ListNotifications(ctx context.Context, appID string, userID stri
 	var models []notificationModel
 	q := s.mdb.NewFind(&models).
 		Filter(bson.M{"app_id": appID, "user_id": userID}).
-		Sort(bson.D{{Key: "created_at", Value: -1}})
+		Sort(bson.D{{Key: "created_at", Value: -1}, {Key: "_id", Value: -1}})
 
 	if limit > 0 {
 		q = q.Limit(int64(limit))

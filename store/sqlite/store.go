@@ -519,7 +519,7 @@ func (s *Store) ListMessages(ctx context.Context, appID string, opts message.Lis
 	if opts.Offset > 0 {
 		q = q.Offset(opts.Offset)
 	}
-	q = q.OrderExpr("created_at DESC")
+	q = q.OrderExpr("created_at DESC, id DESC")
 
 	if err := q.Scan(ctx); err != nil {
 		return nil, err
@@ -621,7 +621,7 @@ func (s *Store) ListNotifications(ctx context.Context, appID string, userID stri
 	q := s.sdb.NewSelect(&models).
 		Where("app_id = ?", appID).
 		Where("user_id = ?", userID).
-		OrderExpr("created_at DESC")
+		OrderExpr("created_at DESC, id DESC")
 
 	if limit > 0 {
 		q = q.Limit(limit)

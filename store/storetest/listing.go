@@ -1,6 +1,7 @@
 package storetest
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -146,4 +147,52 @@ func testMessagePaging(t *testing.T, s store.Store) {
 	if len(past) != 0 {
 		t.Errorf("offset past the end: got %d rows, want 0", len(past))
 	}
+}
+
+// testTiedPaging seeds rows that share one CreatedAt, as a multi-recipient send
+// does, and pages them with offsets. The dashboard's cursor wraps an offset, so
+// the order inside a tie has to be stable: id descending, matching the memory
+// store.
+func testTiedPaging(t *testing.T, s store.Store) {
+	const total, size = 7, 3
+	tied := Base.Add(time.Hour)
+
+	msgIDs := make([]string, 0, total)
+	for range total {
+		m := newMessage("app_a", "email", message.StatusSent, tied)
+		must(t, "create tied message", s.CreateMessage(ctx, m))
+		msgIDs = append(msgIDs, m.ID.String())
+	}
+	var gotMsgs []string
+	for offset := 0; offset < total+size; offset += size {
+		page, err := s.ListMessages(ctx, "app_a", message.ListOptions{Offset: offset, Limit: size})
+		must(t, "list tied message page", err)
+		for _, m := range page {
+			gotMsgs = append(gotMsgs, m.ID.String())
+		}
+	}
+	sameOrder(t, "tied messages paged by offset", gotMsgs, idsDescending(msgIDs))
+
+	notifIDs := make([]string, 0, total)
+	for range total {
+		n := newNotification("app_a", "u1", tied)
+		must(t, "create tied notification", s.CreateNotification(ctx, n))
+		notifIDs = append(notifIDs, n.ID.String())
+	}
+	var gotNotifs []string
+	for offset := 0; offset < total+size; offset += size {
+		page, err := s.ListNotifications(ctx, "app_a", "u1", size, offset)
+		must(t, "list tied notification page", err)
+		for _, n := range page {
+			gotNotifs = append(gotNotifs, n.ID.String())
+		}
+	}
+	sameOrder(t, "tied notifications paged by offset", gotNotifs, idsDescending(notifIDs))
+}
+
+func idsDescending(in []string) []string {
+	out := slices.Clone(in)
+	slices.Sort(out)
+	slices.Reverse(out)
+	return out
 }
