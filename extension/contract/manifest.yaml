@@ -46,3 +46,6 @@ intents:
   - { name: inbox.delete,      kind: command, version: 1, capability: write, invalidates: [inbox.list] }
   - { name: preferences.get,    kind: query,   version: 1, capability: read }
   - { name: preferences.optOut, kind: command, version: 1, capability: write, invalidates: [preferences.get] }
+  - { name: scopes.list,   kind: query,   version: 1, capability: read }
+  - { name: scopes.set,    kind: command, version: 1, capability: write, invalidates: [scopes.list, send.resolve, providers.detail] }
+  - { name: scopes.delete, kind: command, version: 1, capability: write, invalidates: [scopes.list, send.resolve, providers.detail] }

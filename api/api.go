@@ -2,9 +2,7 @@
 package api
 
 import (
-	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -1109,7 +1107,7 @@ func (a *ForgeAPI) setUserConfig(ctx forge.Context, req *SetUserConfigRequest) (
 // keeps an existing row's ID on upsert, so the freshly minted ID below is
 // only used when the row is new.
 func (a *ForgeAPI) saveScopedConfig(ctx forge.Context, cfg *scope.Config) (*scope.Config, error) {
-	if err := a.checkRoutedProviders(ctx.Context(), cfg); err != nil {
+	if err := a.herald.CheckRouting(ctx.Context(), cfg); err != nil {
 		return nil, mapError(err)
 	}
 	now := time.Now().UTC()
@@ -1126,41 +1124,6 @@ func (a *ForgeAPI) saveScopedConfig(ctx forge.Context, cfg *scope.Config) (*scop
 		"scope": string(saved.Scope), "scope_id": saved.ScopeID,
 	})
 	return saved, nil
-}
-
-// checkRoutedProviders refuses a routing rule that names a provider outside
-// cfg's app or on another channel. The error reads the same whether the ID is
-// malformed, missing or another app's, so it never confirms that an ID exists
-// elsewhere.
-func (a *ForgeAPI) checkRoutedProviders(ctx context.Context, cfg *scope.Config) error {
-	slots := []struct{ field, channel, raw string }{
-		{"email_provider_id", "email", cfg.EmailProviderID},
-		{"sms_provider_id", "sms", cfg.SMSProviderID},
-		{"push_provider_id", "push", cfg.PushProviderID},
-		{"webhook_provider_id", "webhook", cfg.WebhookProviderID},
-		{"chat_provider_id", "chat", cfg.ChatProviderID},
-	}
-	for _, s := range slots {
-		if s.raw == "" {
-			continue
-		}
-		unusable := fmt.Errorf("%w: %s %q is not a %s provider of this app", herald.ErrInvalidProvider, s.field, s.raw, s.channel)
-		pid, err := id.ParseProviderID(s.raw)
-		if err != nil {
-			return unusable
-		}
-		p, err := a.herald.GetProvider(ctx, cfg.AppID, pid)
-		if errors.Is(err, store.ErrProviderNotFound) {
-			return unusable
-		}
-		if err != nil {
-			return err
-		}
-		if p.Channel != s.channel {
-			return unusable
-		}
-	}
-	return nil
 }
 
 func (a *ForgeAPI) deleteOrgConfig(ctx forge.Context, req *DeleteOrgConfigRequest) (*scope.Config, error) {
