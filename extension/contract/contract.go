@@ -54,6 +54,7 @@ type Deps struct {
 // one; Register runs them all.
 var registrars = []func(*dispatcher.Dispatcher, Deps) error{
 	registerEngine,
+	registerOverview,
 }
 
 // Register loads and validates the embedded manifest, registers the `herald`
