@@ -38,3 +38,5 @@ intents:
   - { name: versions.delete,         kind: command, version: 1, capability: write, invalidates: [templates.list, templates.detail, templates.resolve, overview.stats] }
   - { name: messages.list,   kind: query, version: 1, capability: read }
   - { name: messages.detail, kind: query, version: 1, capability: read }
+  - { name: send.resolve, kind: query,   version: 1, capability: read }
+  - { name: send.test,    kind: command, version: 1, capability: write, invalidates: [messages.list, messages.detail, overview.stats, inbox.list] }

@@ -59,6 +59,7 @@ var registrars = []func(*dispatcher.Dispatcher, Deps) error{
 	registerTemplates,
 	registerVersions,
 	registerMessages,
+	registerSend,
 }
 
 // Register loads and validates the embedded manifest, registers the `herald`
