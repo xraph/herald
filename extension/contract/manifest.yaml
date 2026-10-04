@@ -1,0 +1,17 @@
+schemaVersion: 1
+contributor:
+  name: herald
+  envelope:
+    supports: [v1]
+    preferred: v1
+  capabilities: [herald.read, herald.write]
+
+# No intent below takes an app id. Every handler resolves the app from the
+# session principal (scope.go): a usable app_id claim, else the configured
+# dashboard_app_id, else the "" app. A claim that is present but unusable is
+# refused with PERMISSION_DENIED.
+#
+# Each command's invalidates follows the spec's command table; the React
+# client refreshes through these and nothing else.
+intents:
+  - { name: engine.info, kind: query, version: 1, capability: read }

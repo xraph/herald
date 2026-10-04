@@ -43,6 +43,12 @@ type Config struct {
 	// key keep working after a rotation.
 	PreviousCredentialsKeys []CredentialKeyConfig `json:"previous_credentials_keys" yaml:"previous_credentials_keys" mapstructure:"previous_credentials_keys"`
 
+	// DashboardAppID is the app the dashboard shows to a session that carries
+	// no app_id claim. Empty means the "" app, where standalone installs keep
+	// their data. A session whose claim is present but unusable is refused,
+	// never shown this app.
+	DashboardAppID string `json:"dashboard_app_id" yaml:"dashboard_app_id" mapstructure:"dashboard_app_id"`
+
 	// RequireConfig requires config to be present in YAML files.
 	// If true and no config is found, Register returns an error.
 	RequireConfig bool `json:"-" yaml:"-"`

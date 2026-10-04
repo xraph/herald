@@ -9,6 +9,8 @@ import (
 
 	"github.com/xraph/chronicle"
 	"github.com/xraph/forge"
+	dashcontract "github.com/xraph/forge/extensions/dashboard/contract"
+	"github.com/xraph/forge/extensions/dashboard/contract/dispatcher"
 	"github.com/xraph/grove"
 	"github.com/xraph/vessel"
 
@@ -20,6 +22,7 @@ import (
 	"github.com/xraph/herald/driver/inapp"
 	"github.com/xraph/herald/driver/push"
 	"github.com/xraph/herald/driver/sms"
+	heraldcontract "github.com/xraph/herald/extension/contract"
 	"github.com/xraph/herald/store"
 	mongostore "github.com/xraph/herald/store/mongo"
 	pgstore "github.com/xraph/herald/store/postgres"
@@ -227,6 +230,37 @@ func (e *Extension) RegisterRoutes(router forge.Router) {
 // False also when routes are disabled and the host mounts them itself.
 func (e *Extension) APIProtected() bool { return e.apiProtected }
 
+// RegisterContractContributor implements dashboard.ContractContributorAware.
+// It registers the herald contract contributor, which is what the React
+// shell reads.
+func (e *Extension) RegisterContractContributor(
+	disp *dispatcher.Dispatcher,
+	reg dashcontract.Registry,
+	wreg dashcontract.WardenRegistry,
+) error {
+	if e.h == nil {
+		// Not initialised: skip quietly rather than take the dashboard down.
+		if e.BaseExtension != nil {
+			if logger := e.Logger(); logger != nil {
+				logger.Warn("herald: not initialised; skipping contract contributor registration")
+			}
+		}
+		return nil
+	}
+	deps := heraldcontract.Deps{
+		Herald:       e.h,
+		DefaultAppID: e.config.DashboardAppID,
+		APIProtected: e.APIProtected,
+	}
+	if logger := e.Logger(); logger != nil {
+		deps.Logger = logger
+	}
+	if err := heraldcontract.Register(disp, reg, wreg, deps); err != nil {
+		return fmt.Errorf("herald: register contract contributor: %w", err)
+	}
+	return nil
+}
+
 // BasePath returns the configured URL base path.
 func (e *Extension) BasePath() string {
 	if e.config.BasePath == "" {
@@ -360,6 +394,10 @@ func (e *Extension) mergeConfigurations(yamlConfig, programmaticConfig Config) C
 	}
 	if yamlConfig.TruncateBodyAt == 0 && programmaticConfig.TruncateBodyAt != 0 {
 		yamlConfig.TruncateBodyAt = programmaticConfig.TruncateBodyAt
+	}
+
+	if yamlConfig.DashboardAppID == "" && programmaticConfig.DashboardAppID != "" {
+		yamlConfig.DashboardAppID = programmaticConfig.DashboardAppID
 	}
 
 	// Fill remaining zeros with defaults.
