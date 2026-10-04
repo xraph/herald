@@ -40,3 +40,7 @@ intents:
   - { name: messages.detail, kind: query, version: 1, capability: read }
   - { name: send.resolve, kind: query,   version: 1, capability: read }
   - { name: send.test,    kind: command, version: 1, capability: write, invalidates: [messages.list, messages.detail, overview.stats, inbox.list] }
+  - { name: inbox.list,        kind: query,   version: 1, capability: read }
+  - { name: inbox.markRead,    kind: command, version: 1, capability: write, invalidates: [inbox.list] }
+  - { name: inbox.markAllRead, kind: command, version: 1, capability: write, invalidates: [inbox.list] }
+  - { name: inbox.delete,      kind: command, version: 1, capability: write, invalidates: [inbox.list] }
