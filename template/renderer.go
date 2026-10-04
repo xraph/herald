@@ -124,7 +124,7 @@ func (r *Renderer) validateVariables(vars []Variable, data map[string]any) error
 
 // renderText renders a text/template string with the given data.
 func (r *Renderer) renderText(tmplStr string, data map[string]any) (string, error) {
-	t, err := texttpl.New("").Funcs(r.funcMap).Parse(tmplStr)
+	t, err := texttpl.New("").Funcs(r.funcs(newBudget())).Parse(tmplStr)
 	if err != nil {
 		return "", err
 	}
@@ -139,10 +139,12 @@ func (r *Renderer) renderText(tmplStr string, data map[string]any) (string, erro
 
 // renderHTML renders an html/template string with the given data (auto-escapes).
 func (r *Renderer) renderHTML(tmplStr string, data map[string]any) (string, error) {
-	t, err := htmltpl.New("").Funcs(r.funcMap).Parse(tmplStr)
+	//nolint:unconvert // html/template and text/template have distinct FuncMap types; conversion is required
+	t, err := htmltpl.New("").Funcs(htmltpl.FuncMap(r.funcs(newBudget()))).Parse(tmplStr)
 	if err != nil {
 		return "", err
 	}
+	boundEvalArgsInHTML(t)
 
 	var buf limitedBuffer
 	if err := t.Execute(&buf, data); err != nil {

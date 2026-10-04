@@ -57,7 +57,7 @@ func (r *Renderer) Preview(c Content, vars []Variable, data map[string]any) *Pre
 			rendered, tree, err := r.renderField(f.name, f.src, f.html, data)
 			switch {
 			case errors.Is(err, ErrRenderedTooLarge):
-				res.Diagnostics = append(res.Diagnostics, tooLarge(f.name, f.src, tree))
+				res.Diagnostics = append(res.Diagnostics, tooLarge(f.name, f.src, tree, err))
 			case err != nil:
 				res.Diagnostics = append(res.Diagnostics, diagnose(f.name, f.src, err))
 			default:
@@ -80,16 +80,17 @@ func (r *Renderer) renderField(name, src string, html bool, data map[string]any)
 	var buf limitedBuffer
 	if html {
 		//nolint:unconvert // html/template and text/template have distinct FuncMap types; conversion is required
-		t, err := htmltpl.New(name).Funcs(htmltpl.FuncMap(r.funcMap)).Parse(src)
+		t, err := htmltpl.New(name).Funcs(htmltpl.FuncMap(r.funcs(newBudget()))).Parse(src)
 		if err != nil {
 			return "", nil, err
 		}
+		boundEvalArgsInHTML(t)
 		if err := t.Execute(&buf, data); err != nil {
 			return "", t.Tree, err
 		}
 		return buf.String(), t.Tree, nil
 	}
-	t, err := texttpl.New(name).Funcs(r.funcMap).Parse(src)
+	t, err := texttpl.New(name).Funcs(r.funcs(newBudget())).Parse(src)
 	if err != nil {
 		return "", nil, err
 	}
@@ -99,15 +100,20 @@ func (r *Renderer) renderField(name, src string, html bool, data map[string]any)
 	return buf.String(), t.Tree, nil
 }
 
-// tooLarge reports a field whose output passed MaxRenderedFieldBytes. Go
-// doesn't say where execution was when the write failed, so the diagnostic
+// tooLarge reports a field whose output, or a string a function built for
+// it, passed the limits. A function that refused says where it was called,
+// and the diagnostic points there. A failed write doesn't, so the diagnostic
 // points at the first loop or template call in the field, which is where the
 // output can multiply. A field with neither is reported without a position.
-func tooLarge(field, src string, tree *parse.Tree) Diagnostic {
+func tooLarge(field, src string, tree *parse.Tree, err error) Diagnostic {
 	d := Diagnostic{
 		Field: field, Severity: SeverityError, Kind: KindExec,
 		Message: fmt.Sprintf("the rendered %s is over the %d KiB limit for one field; check for a loop that runs too many times",
 			field, MaxRenderedFieldBytes>>10),
+	}
+	if at := diagnose(field, src, err); at.Line > 0 {
+		d.Line, d.Column = at.Line, at.Column
+		return d
 	}
 	if tree == nil {
 		return d

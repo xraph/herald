@@ -141,6 +141,36 @@ func TestSendRefusesATemplateWhoseOutputIsTooLarge(t *testing.T) {
 	}
 }
 
+// TestSendRefusesATemplateThatBuildsTooMuch grows a variable by doubling it
+// and never writes it, so only the string-building functions see the size.
+func TestSendRefusesATemplateThatBuildsTooMuch(t *testing.T) {
+	st := memory.New()
+	rec := &recordingDriver{name: "rec", channel: "email"}
+	h := newHerald(t, st, WithDriver(rec))
+	seedProvider(t, h, "app_a", "primary", "rec", 0, true)
+	tmpl := &template.Template{ID: id.NewTemplateID(), AppID: "app_a", Slug: "doubling", Name: "Doubling", Channel: "email", Enabled: true}
+	if err := st.CreateTemplate(bg, tmpl); err != nil {
+		t.Fatalf("CreateTemplate: %v", err)
+	}
+	v := &template.Version{ID: id.NewTemplateVersionID(), TemplateID: tmpl.ID, Active: true,
+		Subject: "Hi", Text: `{{$x := "xxxxxxxx"}}{{range 24}}{{$x = printf "%s%s" $x $x}}{{end}}ok`}
+	if err := st.CreateVersion(bg, v); err != nil {
+		t.Fatalf("CreateVersion: %v", err)
+	}
+
+	start := time.Now()
+	_, err := h.Send(bg, &SendRequest{AppID: "app_a", Channel: "email", Template: "doubling", To: []string{"ada@example.com"}})
+	if took := time.Since(start); took >= time.Second {
+		t.Errorf("Send took %s", took)
+	}
+	if !errors.Is(err, template.ErrRenderedTooLarge) || !errors.Is(err, template.ErrTemplateRenderFailed) {
+		t.Errorf("err = %v, want ErrRenderedTooLarge inside ErrTemplateRenderFailed", err)
+	}
+	if len(rec.sent) != 0 {
+		t.Errorf("the driver was called %d times", len(rec.sent))
+	}
+}
+
 func TestOptedOutIsSuppressedAndLogged(t *testing.T) {
 	st := memory.New()
 	rec := &recordingDriver{name: "rec", channel: "email"}
