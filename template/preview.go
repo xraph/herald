@@ -1,7 +1,7 @@
 package template
 
 import (
-	"bytes"
+	"errors"
 	"fmt"
 	htmltpl "html/template"
 	texttpl "text/template"
@@ -55,9 +55,12 @@ func (r *Renderer) Preview(c Content, vars []Variable, data map[string]any) *Pre
 		out := FieldOutput{Field: f.name}
 		if f.src != "" {
 			rendered, tree, err := r.renderField(f.name, f.src, f.html, data)
-			if err != nil {
+			switch {
+			case errors.Is(err, ErrRenderedTooLarge):
+				res.Diagnostics = append(res.Diagnostics, tooLarge(f.name, f.src, tree))
+			case err != nil:
 				res.Diagnostics = append(res.Diagnostics, diagnose(f.name, f.src, err))
-			} else {
+			default:
 				out.Output, out.Rendered = rendered, true
 			}
 			if tree != nil {
@@ -74,7 +77,7 @@ func (r *Renderer) Preview(c Content, vars []Variable, data map[string]any) *Pre
 // field so Go's error messages say where they came from. The parse tree is
 // returned whenever parsing succeeded, even if execution failed.
 func (r *Renderer) renderField(name, src string, html bool, data map[string]any) (string, *parse.Tree, error) {
-	var buf bytes.Buffer
+	var buf limitedBuffer
 	if html {
 		//nolint:unconvert // html/template and text/template have distinct FuncMap types; conversion is required
 		t, err := htmltpl.New(name).Funcs(htmltpl.FuncMap(r.funcMap)).Parse(src)
@@ -94,6 +97,56 @@ func (r *Renderer) renderField(name, src string, html bool, data map[string]any)
 		return "", t.Tree, err
 	}
 	return buf.String(), t.Tree, nil
+}
+
+// tooLarge reports a field whose output passed MaxRenderedFieldBytes. Go
+// doesn't say where execution was when the write failed, so the diagnostic
+// points at the first loop or template call in the field, which is where the
+// output can multiply. A field with neither is reported without a position.
+func tooLarge(field, src string, tree *parse.Tree) Diagnostic {
+	d := Diagnostic{
+		Field: field, Severity: SeverityError, Kind: KindExec,
+		Message: fmt.Sprintf("the rendered %s is over the %d KiB limit for one field; check for a loop that runs too many times",
+			field, MaxRenderedFieldBytes>>10),
+	}
+	if tree == nil {
+		return d
+	}
+	if n := firstRepeat(tree.Root); n != nil {
+		loc, _ := tree.ErrorContext(n)
+		d.Line, d.Column = position(src, loc)
+	}
+	return d
+}
+
+// firstRepeat returns the first range or template node in document order,
+// looking inside if and with bodies but not inside a range, so a nested loop
+// reports its outermost loop.
+func firstRepeat(node parse.Node) parse.Node {
+	switch n := node.(type) {
+	case *parse.ListNode:
+		if n == nil {
+			return nil
+		}
+		for _, c := range n.Nodes {
+			if found := firstRepeat(c); found != nil {
+				return found
+			}
+		}
+	case *parse.RangeNode, *parse.TemplateNode:
+		return n
+	case *parse.IfNode:
+		if found := firstRepeat(n.List); found != nil {
+			return found
+		}
+		return firstRepeat(n.ElseList)
+	case *parse.WithNode:
+		if found := firstRepeat(n.List); found != nil {
+			return found
+		}
+		return firstRepeat(n.ElseList)
+	}
+	return nil
 }
 
 // undeclared warns once per name about a top-level field (.name or $.name)

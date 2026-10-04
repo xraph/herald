@@ -3,6 +3,7 @@ package template
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func only(t *testing.T, res *PreviewResult, want Diagnostic) {
@@ -122,5 +123,44 @@ func TestEveryFieldIsListedInOrder(t *testing.T) {
 	}
 	if _, ok := output(res, "subject"); ok {
 		t.Error("an empty field reported Rendered")
+	}
+}
+
+// hugeLoop would render 800 GB without the output limit.
+const hugeLoop = "{{range 100000000000}}xxxxxxxx{{end}}"
+
+// within fails the test when f is still running after d.
+func within(t *testing.T, d time.Duration, f func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { defer close(done); f() }()
+	select {
+	case <-done:
+	case <-time.After(d):
+		t.Fatalf("still running after %s", d)
+	}
+}
+
+func TestOutputOverTheLimitIsAPositionedDiagnostic(t *testing.T) {
+	items := make([]any, 100)
+	var res *PreviewResult
+	within(t, 10*time.Second, func() {
+		res = NewRenderer().Preview(Content{
+			Subject: "fine",
+			HTML:    "<p>\n  " + hugeLoop + "</p>",
+			// 100 * 100 * 100 * 64 bytes is 64 MB from a list in data.
+			Text: "x {{range .items}}{{range $.items}}{{range $.items}}" + strings.Repeat("y", 64) + "{{end}}{{end}}{{end}}",
+		}, []Variable{{Name: "items"}}, map[string]any{"items": items})
+	})
+	only(t, res, Diagnostic{Field: "html", Kind: KindExec, Severity: SeverityError, Line: 2, Column: 11})
+	only(t, res, Diagnostic{Field: "text", Kind: KindExec, Severity: SeverityError, Line: 1, Column: 11,
+		Message: "the rendered text is over the 1024 KiB limit for one field; check for a loop that runs too many times"})
+	for _, f := range []string{"html", "text"} {
+		if out, ok := output(res, f); ok || out != "" {
+			t.Errorf("%s rendered %d bytes past the limit", f, len(out))
+		}
+	}
+	if out, ok := output(res, "subject"); !ok || out != "fine" {
+		t.Errorf("subject = %q %v, want it rendered", out, ok)
 	}
 }

@@ -17,7 +17,29 @@ var (
 	ErrNoVersionForLocale      = errors.New("herald: no template version for locale")
 	ErrTemplateRenderFailed    = errors.New("herald: template rendering failed")
 	ErrMissingRequiredVariable = errors.New("herald: missing required template variable")
+	ErrRenderedTooLarge        = errors.New("herald: rendered template is over the size limit")
 )
+
+// MaxRenderedFieldBytes is the most one rendered field (subject, HTML, text
+// or title) may produce. A loop such as {{range 100000000000}} would otherwise
+// grow the output until the process runs out of memory.
+const MaxRenderedFieldBytes = 1 << 20
+
+// limitedBuffer collects rendered output and fails the write that would take
+// it past MaxRenderedFieldBytes. Go's template packages stop executing on the
+// first failed write and return that error unwrapped.
+type limitedBuffer struct {
+	buf bytes.Buffer
+}
+
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	if b.buf.Len()+len(p) > MaxRenderedFieldBytes {
+		return 0, ErrRenderedTooLarge
+	}
+	return b.buf.Write(p)
+}
+
+func (b *limitedBuffer) String() string { return b.buf.String() }
 
 // RenderedContent holds the fully rendered template output.
 type RenderedContent struct {
@@ -107,7 +129,7 @@ func (r *Renderer) renderText(tmplStr string, data map[string]any) (string, erro
 		return "", err
 	}
 
-	var buf bytes.Buffer
+	var buf limitedBuffer
 	if err := t.Execute(&buf, data); err != nil {
 		return "", err
 	}
@@ -122,7 +144,7 @@ func (r *Renderer) renderHTML(tmplStr string, data map[string]any) (string, erro
 		return "", err
 	}
 
-	var buf bytes.Buffer
+	var buf limitedBuffer
 	if err := t.Execute(&buf, data); err != nil {
 		return "", err
 	}

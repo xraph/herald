@@ -5,6 +5,7 @@ import (
 	"errors"
 	"maps"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/xraph/herald/driver"
@@ -15,6 +16,7 @@ import (
 	"github.com/xraph/herald/scope"
 	"github.com/xraph/herald/store"
 	"github.com/xraph/herald/store/memory"
+	"github.com/xraph/herald/template"
 )
 
 var bg = context.Background()
@@ -102,6 +104,40 @@ func TestSendFailureIsRecordedNotReturned(t *testing.T) {
 	got, _ := st.GetMessage(bg, res.MessageID)
 	if got.Status != message.StatusFailed || got.SentAt != nil {
 		t.Errorf("stored = %+v", got)
+	}
+}
+
+func TestSendRefusesATemplateWhoseOutputIsTooLarge(t *testing.T) {
+	st := memory.New()
+	rec := &recordingDriver{name: "rec", channel: "email"}
+	h := newHerald(t, st, WithDriver(rec))
+	seedProvider(t, h, "app_a", "primary", "rec", 0, true)
+	tmpl := &template.Template{ID: id.NewTemplateID(), AppID: "app_a", Slug: "huge", Name: "Huge", Channel: "email", Enabled: true}
+	if err := st.CreateTemplate(bg, tmpl); err != nil {
+		t.Fatalf("CreateTemplate: %v", err)
+	}
+	// Without the output limit this text would grow to 800 GB.
+	v := &template.Version{ID: id.NewTemplateVersionID(), TemplateID: tmpl.ID, Active: true,
+		Subject: "Hi", Text: "{{range 100000000000}}xxxxxxxx{{end}}"}
+	if err := st.CreateVersion(bg, v); err != nil {
+		t.Fatalf("CreateVersion: %v", err)
+	}
+
+	errc := make(chan error, 1)
+	go func() {
+		_, err := h.Send(bg, &SendRequest{AppID: "app_a", Channel: "email", Template: "huge", To: []string{"ada@example.com"}})
+		errc <- err
+	}()
+	select {
+	case err := <-errc:
+		if !errors.Is(err, template.ErrRenderedTooLarge) || !errors.Is(err, template.ErrTemplateRenderFailed) {
+			t.Errorf("err = %v, want ErrRenderedTooLarge inside ErrTemplateRenderFailed", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Send still rendering after 10s")
+	}
+	if len(rec.sent) != 0 {
+		t.Errorf("the driver was called %d times", len(rec.sent))
 	}
 }
 

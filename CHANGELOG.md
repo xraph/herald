@@ -71,7 +71,7 @@ Tenant isolation on the REST API rests on that middleware. Herald takes `app_id`
 
 The extension registers a `herald` contributor with forge's dashboard contract, so the React dashboard can manage Herald: providers, templates and their versions, the delivery log, a real test send, in-app inboxes, user preferences and routing rules. It needs forge v1.11.2 or later.
 
-The dashboard works on one app per session. It takes the `app_id` claim from the session when there is one, then `dashboard_app_id` from the extension config, then the `""` app. A session whose `app_id` claim is present but empty or not a string is refused, never moved to another app.
+The dashboard works on one app per session. It takes the `app_id` claim from the session when there is one, then `dashboard_app_id` from the extension config, then the `""` app. A session whose `app_id` claim is present but empty, blank or not a string is refused, never moved to another app.
 
 Operators can opt a user out of a notification type on a channel. They can't opt a user back in, and the dashboard never deletes a preference record, because a missing record means the user gets everything.
 
@@ -90,3 +90,4 @@ Operators can opt a user out of a notification type on a channel. They can't opt
 - SES builds its API host from the `region` setting when `base_url` is empty, so a crafted region can redirect a signed request. The secret key itself isn't sent.
 - The webhook driver's `url` is a credential, so changing it alone isn't treated as a move, and the `signing_secret` Herald keeps signs payloads sent to the new URL.
 - Connection targets are a fixed list of keys (`base_url` and `host`). A third-party driver whose target has another name isn't protected, because `driver.Field` has no flag that marks a connection target.
+- An empty loop in a template can still burn CPU in a preview or a send. Output is capped at 1 MiB per field, but `{{range 100000000000}}{{end}}` writes nothing, so it runs until it's done.
