@@ -175,13 +175,13 @@ func testTiedPaging(t *testing.T, s store.Store) {
 
 	notifIDs := make([]string, 0, total)
 	for range total {
-		n := newNotification("app_a", "u1", tied)
+		n := newNotification("app_b", "u1", tied)
 		must(t, "create tied notification", s.CreateNotification(ctx, n))
 		notifIDs = append(notifIDs, n.ID.String())
 	}
 	var gotNotifs []string
 	for offset := 0; offset < total+size; offset += size {
-		page, err := s.ListNotifications(ctx, "app_a", "u1", size, offset)
+		page, err := s.ListNotifications(ctx, "app_b", "u1", size, offset)
 		must(t, "list tied notification page", err)
 		for _, n := range page {
 			gotNotifs = append(gotNotifs, n.ID.String())
