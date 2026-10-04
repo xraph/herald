@@ -72,7 +72,8 @@ type ProviderSummary struct {
 }
 
 // SettingEntry is one setting. Value is omitted for a key the driver marks
-// secret, which only a row written before placement rules can hold.
+// secret, which only a row written before placement rules can hold, and for
+// every key when the driver isn't registered or has no schema.
 type SettingEntry struct {
 	Key    string  `json:"key"`
 	Value  *string `json:"value,omitempty"`
@@ -107,19 +108,23 @@ func projectProvider(h *herald.Herald, p *provider.Provider) ProviderSummary {
 	}
 }
 
+// projectSettings lists a provider's settings, hiding the value of every key
+// its driver marks secret. When the driver isn't registered or has no schema,
+// nothing says which keys are secret, so every value is hidden: a legacy row
+// can hold a secret in settings.
 func projectSettings(h *herald.Herald, p *provider.Provider) []SettingEntry {
+	fields, ok := h.Drivers().Describe(p.Driver)
+	unknown := !ok || len(fields) == 0
 	secret := map[string]bool{}
-	if fields, ok := h.Drivers().Describe(p.Driver); ok {
-		for _, f := range fields {
-			if f.Secret {
-				secret[f.Key] = true
-			}
+	for _, f := range fields {
+		if f.Secret {
+			secret[f.Key] = true
 		}
 	}
 	keys := slices.Sorted(maps.Keys(p.Settings))
 	out := make([]SettingEntry, 0, len(keys))
 	for _, k := range keys {
-		entry := SettingEntry{Key: k, Secret: secret[k]}
+		entry := SettingEntry{Key: k, Secret: unknown || secret[k]}
 		if !entry.Secret {
 			v := p.Settings[k]
 			entry.Value = &v

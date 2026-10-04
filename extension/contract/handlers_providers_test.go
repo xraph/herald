@@ -1,11 +1,16 @@
 package contract
 
 import (
+	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/xraph/herald"
+	"github.com/xraph/herald/driver"
 	"github.com/xraph/herald/id"
+	"github.com/xraph/herald/provider"
 	"github.com/xraph/herald/scope"
 )
 
@@ -63,6 +68,45 @@ func TestProvidersDetailOwnership(t *testing.T) {
 	_, err = providersDetailHandler(e.deps)(bg, providersDetailRequest{ID: "nope"}, as(appA))
 	if codeOf(err) != "BAD_REQUEST" {
 		t.Errorf("malformed id: %v, want BAD_REQUEST", err)
+	}
+}
+
+// plainDriver is a registered email driver that doesn't describe its fields.
+type plainDriver struct{}
+
+func (plainDriver) Name() string                          { return "plain" }
+func (plainDriver) Channel() string                       { return "email" }
+func (plainDriver) Validate(_, _ map[string]string) error { return nil }
+func (plainDriver) Send(context.Context, *driver.OutboundMessage) (*driver.DeliveryResult, error) {
+	return &driver.DeliveryResult{}, nil
+}
+
+// TestProvidersDetailHidesSettingsWithoutASchema covers a provider whose
+// driver isn't registered or doesn't describe itself. Nothing says which of
+// its settings are secret, so every one is listed without its value.
+func TestProvidersDetailHidesSettingsWithoutASchema(t *testing.T) {
+	for _, drv := range []string{"unregistered", "plain"} {
+		t.Run(drv, func(t *testing.T) {
+			e := newEnv(t, herald.WithDriver(plainDriver{}))
+			p := &provider.Provider{
+				ID: id.NewProviderID(), AppID: appA, Name: "legacy", Channel: "email", Driver: drv,
+				Settings: map[string]string{"from": "no-reply@example.com", "token": canary}, Enabled: true,
+			}
+			if err := e.st.CreateProvider(bg, p); err != nil {
+				t.Fatal(err)
+			}
+			detail, err := providersDetailHandler(e.deps)(bg, providersDetailRequest{ID: p.ID.String()}, as(appA))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []SettingEntry{{Key: "from", Secret: true}, {Key: "token", Secret: true}}
+			if !reflect.DeepEqual(detail.Provider.Settings, want) {
+				t.Errorf("settings = %+v, want every key, valueless and secret", detail.Provider.Settings)
+			}
+			if raw, _ := json.Marshal(detail); strings.Contains(string(raw), canary) {
+				t.Errorf("providers.detail leaked a setting value: %s", raw)
+			}
+		})
 	}
 }
 
