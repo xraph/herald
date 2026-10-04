@@ -92,9 +92,9 @@ func (h *Herald) Send(ctx context.Context, req *SendRequest) (*SendResult, error
 	}
 	prov := resolved.Provider
 
-	drv, err := h.drivers.Get(prov.Driver)
+	drv, err := h.driverFor(prov)
 	if err != nil {
-		return nil, fmt.Errorf("%w: driver=%s", ErrDriverNotFound, prov.Driver)
+		return nil, err
 	}
 
 	// A decryption failure is recorded on every message row below rather than
@@ -297,6 +297,16 @@ func (h *Herald) resolveForSend(ctx context.Context, req *SendRequest) (*scope.R
 	}
 	cfg, _ := h.store.GetScopedConfig(ctx, req.AppID, scope.ScopeApp, req.AppID) //nolint:errcheck // no app rule means provider settings supply From
 	return &scope.ResolveResult{Provider: p, Config: cfg, Via: scope.ViaChosen}, nil
+}
+
+// driverFor returns the registered driver for p, or ErrDriverNotFound. Send
+// and PreviewSend both call it, so a preview refuses what a send would.
+func (h *Herald) driverFor(p *provider.Provider) (driver.Driver, error) {
+	drv, err := h.drivers.Get(p.Driver)
+	if err != nil {
+		return nil, fmt.Errorf("%w: driver=%s", ErrDriverNotFound, p.Driver)
+	}
+	return drv, nil
 }
 
 // driverData is the map a driver reads: credentials decrypted, then settings,

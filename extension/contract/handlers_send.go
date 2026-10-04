@@ -5,11 +5,13 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/xraph/forge"
 	"github.com/xraph/forge/extensions/dashboard/contract"
 	"github.com/xraph/forge/extensions/dashboard/contract/dispatcher"
 
 	"github.com/xraph/herald"
 	"github.com/xraph/herald/id"
+	"github.com/xraph/herald/provider"
 )
 
 func registerSend(d *dispatcher.Dispatcher, deps Deps) error {
@@ -114,13 +116,16 @@ func sendTestHandler(deps Deps) func(context.Context, sendTestRequest, contract.
 			return sendTestResponse{}, err
 		}
 		channel, recipient := strings.TrimSpace(in.Channel), strings.TrimSpace(in.Recipient)
+		tmpl, body := strings.TrimSpace(in.Template), strings.TrimSpace(in.Body)
 		switch {
 		case !validChannel(channel):
 			return sendTestResponse{}, badRequest("channel is not one Herald supports")
 		case recipient == "":
 			return sendTestResponse{}, badRequest("recipient is required")
-		case strings.TrimSpace(in.Template) == "" && strings.TrimSpace(in.Body) == "":
+		case tmpl == "" && body == "":
 			return sendTestResponse{}, badRequest("give a template or a body")
+		case tmpl != "" && body != "":
+			return sendTestResponse{}, badRequest("give a template or a body, not both")
 		}
 		if in.ProviderID != "" {
 			if _, perr := parseProviderID(in.ProviderID); perr != nil {
@@ -129,8 +134,8 @@ func sendTestHandler(deps Deps) func(context.Context, sendTestRequest, contract.
 		}
 		res, err := deps.Herald.Send(ctx, &herald.SendRequest{
 			AppID: appID, Channel: channel, To: []string{recipient}, ProviderID: strings.TrimSpace(in.ProviderID),
-			Template: strings.TrimSpace(in.Template), Locale: strings.TrimSpace(in.Locale), Data: in.Data,
-			Subject: in.Subject, Body: in.Body, UserID: strings.TrimSpace(in.UserID),
+			Template: tmpl, Locale: strings.TrimSpace(in.Locale), Data: in.Data,
+			Subject: in.Subject, Body: body, UserID: strings.TrimSpace(in.UserID),
 			Metadata: map[string]string{"source": "dashboard.send.test"},
 		})
 		if err != nil {
@@ -143,10 +148,21 @@ func sendTestHandler(deps Deps) func(context.Context, sendTestRequest, contract.
 			out.MessageID = res.MessageID.String()
 		}
 		if res.ProviderID != "" {
-			if pid, err := id.ParseProviderID(res.ProviderID); err == nil {
-				if prov, err := deps.Herald.GetProvider(ctx, appID, pid); err == nil {
-					out.Provider = &ProviderRef{ID: prov.ID.String(), Name: prov.Name, Driver: prov.Driver}
+			// The provider delivered (or failed) this message, so the answer
+			// always names it. A lookup failure only costs the name and driver.
+			out.Provider = &ProviderRef{ID: res.ProviderID}
+			pid, perr := id.ParseProviderID(res.ProviderID)
+			if perr == nil {
+				var prov *provider.Provider
+				if prov, perr = deps.Herald.GetProvider(ctx, appID, pid); perr == nil {
+					out.Provider.Name, out.Provider.Driver = prov.Name, prov.Driver
 				}
+			}
+			if perr != nil && deps.Logger != nil {
+				deps.Logger.Warn("herald/contract: could not look up the provider a test message used",
+					forge.F("provider", res.ProviderID),
+					forge.F("error", perr),
+				)
 			}
 		}
 		audit(ctx, deps, p, appID, "send.test", "message", out.MessageID, map[string]string{

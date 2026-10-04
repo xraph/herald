@@ -41,3 +41,18 @@ func TestPreviewSendMatchesSend(t *testing.T) {
 		t.Errorf("a chosen provider from another app: %v", err)
 	}
 }
+
+func TestPreviewSendRefusesAnUnregisteredDriverLikeSend(t *testing.T) {
+	st := memory.New()
+	h := newHerald(t, st, WithDriver(&recordingDriver{name: "rec", channel: "email"}))
+	seedProvider(t, h, "app_a", "ghost", "not-registered", 0, true)
+
+	_, sendErr := h.Send(bg, &SendRequest{AppID: "app_a", Channel: "email", To: []string{"ada@example.com"}, Body: "Hi"})
+	if !errors.Is(sendErr, ErrDriverNotFound) {
+		t.Fatalf("Send = %v, want ErrDriverNotFound", sendErr)
+	}
+	_, err := h.PreviewSend(bg, &SendRequest{AppID: "app_a", Channel: "email"})
+	if !errors.Is(err, ErrDriverNotFound) || err.Error() != sendErr.Error() {
+		t.Errorf("PreviewSend = %v, want the error Send returns: %v", err, sendErr)
+	}
+}
