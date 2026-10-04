@@ -137,27 +137,38 @@ func preferencesOptOutHandler(deps Deps) func(context.Context, preferencesOptOut
 			return preferencesOptOutResponse{}, badRequest("channel must be email, sms, push or inapp")
 		}
 
-		optOutMu.Lock()
-		defer optOutMu.Unlock()
-		now := time.Now().UTC()
-		pref, err := deps.Herald.Store().GetPreference(ctx, appID, userID)
-		switch {
-		case errors.Is(err, store.ErrPreferenceNotFound):
-			pref = &preference.Preference{ID: id.NewPreferenceID(), AppID: appID, UserID: userID, CreatedAt: now}
-		case err != nil:
-			return preferencesOptOutResponse{}, deps.mapError("preferences.optOut", err)
-		}
-		if pref.Overrides == nil {
-			pref.Overrides = map[string]preference.ChannelPreference{}
-		}
-		cp := pref.Overrides[typ]
-		set(&cp)
-		pref.Overrides[typ] = cp
-		pref.UpdatedAt = now
-		if err := deps.Herald.Store().SetPreference(ctx, pref); err != nil {
+		pref, err := saveOptOut(ctx, deps, appID, userID, typ, set)
+		if err != nil {
 			return preferencesOptOutResponse{}, deps.mapError("preferences.optOut", err)
 		}
 		audit(ctx, deps, p, appID, "preferences.optOut", "preference", userID, map[string]string{"type": typ, "channel": channel})
 		return preferencesOptOutResponse{Preference: projectPreference(pref)}, nil
 	}
+}
+
+// saveOptOut applies one opt-out under optOutMu and returns the stored record.
+// The lock covers only the read-modify-write, so a slow audit sink (the
+// caller's next step) never stalls other opt-outs.
+func saveOptOut(ctx context.Context, deps Deps, appID, userID, typ string, set func(*preference.ChannelPreference)) (*preference.Preference, error) {
+	optOutMu.Lock()
+	defer optOutMu.Unlock()
+	now := time.Now().UTC()
+	pref, err := deps.Herald.Store().GetPreference(ctx, appID, userID)
+	switch {
+	case errors.Is(err, store.ErrPreferenceNotFound):
+		pref = &preference.Preference{ID: id.NewPreferenceID(), AppID: appID, UserID: userID, CreatedAt: now}
+	case err != nil:
+		return nil, err
+	}
+	if pref.Overrides == nil {
+		pref.Overrides = map[string]preference.ChannelPreference{}
+	}
+	cp := pref.Overrides[typ]
+	set(&cp)
+	pref.Overrides[typ] = cp
+	pref.UpdatedAt = now
+	if err := deps.Herald.Store().SetPreference(ctx, pref); err != nil {
+		return nil, err
+	}
+	return pref, nil
 }
