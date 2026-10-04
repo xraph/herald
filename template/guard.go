@@ -17,6 +17,16 @@ import (
 // printf, println, html, js, urlquery and the string helpers) may build in
 // total while one field renders. Capping each result alone isn't enough: a
 // template can keep many results alive in variables without writing them.
+//
+// These limits cover output and the strings templates build, not the data
+// a render is given. html/template's contextual escapers (jsvalescaper,
+// attrescaper, urlnormalizer, cssvaluefilter and the rest) build their
+// escaped copy of a data value before the capped write refuses it, so a
+// 50 MB value in <script>var v={{.b}}</script> can allocate gigabytes. What
+// bounds that today is outside this package: templates.render caps the
+// whole request at maxRenderBytes (256 KiB, extension/contract), and Send's
+// data comes from application code. A new caller that hands Preview or
+// RenderVersion untrusted data must cap that data itself.
 const MaxBuiltFieldBytes = 4 * MaxRenderedFieldBytes
 
 // evalArgsFunc is the name the HTML renderer gives its bounded replacement
