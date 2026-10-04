@@ -3,6 +3,8 @@ package contract
 import (
 	"context"
 	"reflect"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -71,11 +73,33 @@ func TestOptOutRefusals(t *testing.T) {
 	for name, in := range map[string]preferencesOptOutRequest{
 		"no user":      {Type: "auth.welcome", Channel: "email"},
 		"no type":      {UserID: "u", Channel: "email"},
-		"bad type":     {UserID: "u", Type: "Has Spaces", Channel: "email"},
+		"blank type":   {UserID: "u", Type: " \t ", Channel: "email"},
+		"control char": {UserID: "u", Type: "auth\nwelcome", Channel: "email"},
+		"long type":    {UserID: "u", Type: strings.Repeat("a", 257), Channel: "email"},
 		"chat channel": {UserID: "u", Type: "auth.welcome", Channel: "chat"},
 	} {
 		if _, err := preferencesOptOutHandler(e.deps)(bg, in, as(appA)); codeOf(err) != "BAD_REQUEST" {
 			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+// A slug created through the REST API or Go needn't match the dashboard's
+// slug pattern, and preferences.get offers it, so optOut must take it.
+func TestOptOutTakesEveryTypeGetOffers(t *testing.T) {
+	e := newEnv(t)
+	for _, typ := range []string{"Billing.Receipt", "billing/receipt", "has spaces", strings.Repeat("a", 256)} {
+		e.template(t, appA, typ, "email", "en")
+		got, err := preferencesGetHandler(e.deps)(bg, preferencesGetRequest{UserID: "user-1"}, as(appA))
+		if err != nil || !slices.Contains(got.KnownTypes, typ) {
+			t.Fatalf("get does not offer %q: %v %v", typ, got.KnownTypes, err)
+		}
+		if _, err := preferencesOptOutHandler(e.deps)(bg, preferencesOptOutRequest{UserID: "user-1", Type: typ, Channel: "email"}, as(appA)); err != nil {
+			t.Errorf("optOut %q: %v", typ, err)
+			continue
+		}
+		if p, _ := e.st.GetPreference(bg, appA, "user-1"); p == nil || !p.IsOptedOut(typ, "email") {
+			t.Errorf("%q is not opted out", typ)
 		}
 	}
 }

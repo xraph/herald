@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/xraph/forge/extensions/dashboard/contract"
 	"github.com/xraph/forge/extensions/dashboard/contract/dispatcher"
@@ -122,8 +123,8 @@ func preferencesOptOutHandler(deps Deps) func(context.Context, preferencesOptOut
 			return preferencesOptOutResponse{}, err
 		}
 		typ := strings.TrimSpace(in.Type)
-		if !slugPattern.MatchString(typ) {
-			return preferencesOptOutResponse{}, badRequest("type must be a template slug")
+		if !validType(typ) {
+			return preferencesOptOutResponse{}, badRequest("type must be 1 to 256 bytes with no control characters")
 		}
 		channel := strings.TrimSpace(in.Channel)
 		off := false
@@ -144,6 +145,18 @@ func preferencesOptOutHandler(deps Deps) func(context.Context, preferencesOptOut
 		audit(ctx, deps, p, appID, "preferences.optOut", "preference", userID, map[string]string{"type": typ, "channel": channel})
 		return preferencesOptOutResponse{Preference: projectPreference(pref)}, nil
 	}
+}
+
+// maxTypeLen bounds a preference type. Types are template slugs, but a slug
+// created through the REST API or Go needn't match the dashboard's slug
+// pattern, so anything preferences.get can offer is accepted.
+const maxTypeLen = 256
+
+func validType(typ string) bool {
+	if typ == "" || len(typ) > maxTypeLen {
+		return false
+	}
+	return !strings.ContainsFunc(typ, unicode.IsControl)
 }
 
 // saveOptOut applies one opt-out under optOutMu and returns the stored record.
