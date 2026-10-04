@@ -153,3 +153,30 @@ func TestInboxDeleteAndAudit(t *testing.T) {
 		}
 	}
 }
+
+func TestMarkReadTwiceIsANoOp(t *testing.T) {
+	e := newEnv(t)
+	note := seedInbox(t, e, appA, "user-1", 1)[0]
+	ref := inboxIDRequest{ID: note.ID.String()}
+	if _, err := inboxMarkReadHandler(e.deps)(bg, ref, as(appA)); err != nil {
+		t.Fatal(err)
+	}
+	first, err := e.st.GetNotification(bg, note.ID)
+	if err != nil || !first.Read || first.ReadAt == nil {
+		t.Fatalf("after markRead: %+v, %v", first, err)
+	}
+	e.audits.reset()
+	time.Sleep(2 * time.Millisecond) // a rewrite would move ReadAt
+
+	got, err := inboxMarkReadHandler(e.deps)(bg, ref, as(appA))
+	if err != nil || !got.OK || got.ID != ref.ID {
+		t.Fatalf("markRead again = %+v, %v", got, err)
+	}
+	again, _ := e.st.GetNotification(bg, note.ID)
+	if again.ReadAt == nil || !again.ReadAt.Equal(*first.ReadAt) {
+		t.Errorf("ReadAt moved from %v to %v", first.ReadAt, again.ReadAt)
+	}
+	if events := e.audits.all(); len(events) != 0 {
+		t.Errorf("a no-op markRead wrote %d audit events: %+v", len(events), events)
+	}
+}

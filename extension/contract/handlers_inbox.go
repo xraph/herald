@@ -149,6 +149,10 @@ func inboxMarkReadHandler(deps Deps) func(context.Context, inboxIDRequest, contr
 		if err != nil {
 			return inboxOKResponse{}, err
 		}
+		if n.Read {
+			// Already read: keep the original ReadAt and don't audit a no-op.
+			return inboxOKResponse{OK: true, ID: n.ID.String()}, nil
+		}
 		if err := deps.Herald.Store().MarkRead(ctx, n.ID); err != nil {
 			return inboxOKResponse{}, deps.mapError("inbox.markRead", err)
 		}
