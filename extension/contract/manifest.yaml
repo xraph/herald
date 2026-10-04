@@ -16,3 +16,5 @@ contributor:
 intents:
   - { name: engine.info, kind: query, version: 1, capability: read }
   - { name: overview.stats, kind: query, version: 1, capability: read }
+  - { name: providers.list,   kind: query, version: 1, capability: read }
+  - { name: providers.detail, kind: query, version: 1, capability: read }
