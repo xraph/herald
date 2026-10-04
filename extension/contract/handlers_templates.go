@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xraph/forge"
 	"github.com/xraph/forge/extensions/dashboard/contract"
 	"github.com/xraph/forge/extensions/dashboard/contract/dispatcher"
 
@@ -367,7 +368,17 @@ func templatesCreateHandler(deps Deps) func(context.Context, templatesCreateRequ
 				Active: true, CreatedAt: now, UpdatedAt: now,
 			}
 			if err = st.CreateVersion(ctx, v); err != nil {
-				_ = st.DeleteTemplate(ctx, t.ID) //nolint:errcheck // best-effort rollback; the version error is what the caller needs
+				// A cancelled request is the likeliest time for the first write to
+				// land and the second to fail, so the rollback must outlive ctx.
+				// The caller still gets the version error; a failed rollback is
+				// logged, since it leaves an orphan an operator has to remove.
+				if rbErr := st.DeleteTemplate(context.WithoutCancel(ctx), t.ID); rbErr != nil && deps.Logger != nil {
+					deps.Logger.Error("herald/contract: could not roll back a template whose first version failed",
+						forge.F("templateId", t.ID.String()),
+						forge.F("slug", slug),
+						forge.F("error", rbErr),
+					)
+				}
 				return templateResponse{}, deps.mapError("templates.create", err)
 			}
 		}

@@ -1,10 +1,17 @@
 package contract
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/xraph/forge"
+
+	"github.com/xraph/herald"
 	"github.com/xraph/herald/id"
+	"github.com/xraph/herald/store"
+	"github.com/xraph/herald/store/memory"
 	"github.com/xraph/herald/template"
 )
 
@@ -267,4 +274,107 @@ func TestTemplatesResetDefaults(t *testing.T) {
 	if err != nil || again.Deleted != got.Seeded || again.Seeded != got.Seeded {
 		t.Fatalf("second reset = %+v, %v; want it to replace the %d system templates", again, err, got.Seeded)
 	}
+}
+
+// failingStore is a memory store whose CreateVersion always fails, and whose
+// DeleteTemplate fails too when failDelete is set. It records the context
+// DeleteTemplate ran under.
+type failingStore struct {
+	store.Store
+	failDelete bool
+	deleteCtx  context.Context
+}
+
+func (f *failingStore) CreateVersion(context.Context, *template.Version) error {
+	return errors.New("disk on fire")
+}
+
+func (f *failingStore) DeleteTemplate(ctx context.Context, tid id.TemplateID) error {
+	f.deleteCtx = ctx
+	if f.failDelete {
+		return errors.New("still on fire")
+	}
+	return f.Store.DeleteTemplate(ctx, tid)
+}
+
+// messageLogger records the message and fields of every Error call.
+type messageLogger struct {
+	forge.Logger
+	entries []loggedEntry
+}
+
+type loggedEntry struct {
+	msg    string
+	fields map[string]any
+}
+
+func (l *messageLogger) Error(msg string, fields ...forge.Field) {
+	e := loggedEntry{msg: msg, fields: map[string]any{}}
+	for _, f := range fields {
+		e.fields[f.Key()] = f.Value()
+	}
+	l.entries = append(l.entries, e)
+}
+
+func TestTemplatesCreateRollsBackWhenTheVersionFails(t *testing.T) {
+	create := func(e *env) (templateResponse, error) {
+		cancelled, cancel := context.WithCancel(bg)
+		cancel() // the request is gone by the time the second write fails
+		return templatesCreateHandler(e.deps)(cancelled, templatesCreateRequest{
+			Slug: "auth.welcome", Name: "Welcome", Channel: "email",
+			Version: &versionContent{Locale: "en", Text: "Hello"},
+		}, as(appA))
+	}
+
+	t.Run("the template is removed and the version error is what comes back", func(t *testing.T) {
+		fs := &failingStore{Store: memory.New()}
+		e := newEnv(t, herald.WithStore(fs))
+		log := &messageLogger{}
+		e.deps.Logger = log
+
+		_, err := create(e)
+		if codeOf(err) != "INTERNAL" {
+			t.Fatalf("templates.create = %v, want INTERNAL (the version failure)", err)
+		}
+		list, lerr := fs.ListTemplates(bg, appA)
+		if lerr != nil || len(list) != 0 {
+			t.Fatalf("templates after a failed create = %v, %v; want none", list, lerr)
+		}
+		if fs.deleteCtx == nil || fs.deleteCtx.Err() != nil {
+			t.Error("the rollback must run under a context that outlives the cancelled request")
+		}
+		for _, en := range log.entries {
+			if strings.Contains(en.msg, "roll back") {
+				t.Errorf("a successful rollback was logged: %+v", en)
+			}
+		}
+	})
+
+	t.Run("a failed rollback is logged and does not change the response", func(t *testing.T) {
+		fs := &failingStore{Store: memory.New(), failDelete: true}
+		e := newEnv(t, herald.WithStore(fs))
+		log := &messageLogger{}
+		e.deps.Logger = log
+
+		_, err := create(e)
+		if codeOf(err) != "INTERNAL" {
+			t.Fatalf("templates.create = %v, want INTERNAL (the version failure)", err)
+		}
+		var rollback *loggedEntry
+		for i := range log.entries {
+			if strings.Contains(log.entries[i].msg, "roll back") {
+				rollback = &log.entries[i]
+			}
+		}
+		if rollback == nil {
+			t.Fatalf("the failed rollback was not logged: %+v", log.entries)
+		}
+		if rollback.fields["slug"] != "auth.welcome" || rollback.fields["templateId"] == "" {
+			t.Errorf("rollback entry fields = %+v, want the slug and template id", rollback.fields)
+		}
+		list, lerr := fs.ListTemplates(bg, appA)
+		if lerr != nil || len(list) != 1 {
+			t.Errorf("the orphan should be what the log reports: %v, %v", list, lerr)
+		}
+	})
 }
