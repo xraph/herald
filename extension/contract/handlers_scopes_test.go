@@ -1,11 +1,7 @@
 package contract
 
 import (
-	"context"
 	"testing"
-
-	"github.com/xraph/herald"
-	"github.com/xraph/herald/bridge"
 )
 
 func ptr[T any](v T) *T { return &v }
@@ -107,18 +103,13 @@ func TestScopesDelete(t *testing.T) {
 }
 
 func TestScopesAudit(t *testing.T) {
-	var events []*bridge.AuditEvent
-	rec := bridge.ChronicleFunc(func(_ context.Context, ev *bridge.AuditEvent) error {
-		events = append(events, ev)
-		return nil
-	})
-	e := newEnv(t, herald.WithChronicle(rec))
+	e := newEnv(t)
 
 	if _, err := scopesListHandler(e.deps)(bg, scopesListRequest{}, as(appA)); err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 0 {
-		t.Fatalf("scopes.list wrote %d audit events, want none", len(events))
+	if len(e.audits.all()) != 0 {
+		t.Fatalf("scopes.list wrote %d audit events, want none", len(e.audits.all()))
 	}
 	if _, err := scopesSetHandler(e.deps)(bg, scopesSetRequest{Scope: "org", ScopeID: "org-1", FromName: ptr("Org")}, as(appA)); err != nil {
 		t.Fatal(err)
@@ -127,10 +118,10 @@ func TestScopesAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{"dashboard.scopes.set", "dashboard.scopes.delete"}
-	if len(events) != len(want) {
-		t.Fatalf("got %d audit events, want %d: %+v", len(events), len(want), events)
+	if len(e.audits.all()) != len(want) {
+		t.Fatalf("got %d audit events, want %d: %+v", len(e.audits.all()), len(want), e.audits.all())
 	}
-	for i, ev := range events {
+	for i, ev := range e.audits.all() {
 		if ev.Action != want[i] || ev.ActorID != "operator-1" || ev.Tenant != appA {
 			t.Errorf("event %d = %+v", i, ev)
 		}

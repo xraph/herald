@@ -106,6 +106,8 @@ func (d *hookDriver) Send(ctx context.Context, m *driver.OutboundMessage) (*driv
 	return res, err
 }
 
+// warnLogger records every Warn call. Build it on forge.NewNoopLogger so any
+// other call is ignored instead of panicking.
 type warnLogger struct {
 	forge.Logger
 	warns []string
@@ -119,7 +121,7 @@ func (l *warnLogger) Warn(msg string, fields ...forge.Field) {
 }
 
 func TestSendTestNamesTheProviderEvenWhenTheLookupFails(t *testing.T) {
-	log := &warnLogger{}
+	log := &warnLogger{Logger: forge.NewNoopLogger()}
 	hook := &hookDriver{fakeDriver: &fakeDriver{vendorID: "vendor-1"}}
 	e := newEnv(t, herald.WithDriver(hook))
 	e.deps.Logger = log
@@ -221,19 +223,14 @@ func TestSendTestOtherAppsProviderIsNotFound(t *testing.T) {
 }
 
 func TestSendAudit(t *testing.T) {
-	var events []*bridge.AuditEvent
-	rec := bridge.ChronicleFunc(func(_ context.Context, ev *bridge.AuditEvent) error {
-		events = append(events, ev)
-		return nil
-	})
-	e := newEnv(t, withKey(), herald.WithChronicle(rec))
+	e := newEnv(t, withKey())
 	e.provider(t, appA, "primary")
 
 	if _, err := sendResolveHandler(e.deps)(bg, sendResolveRequest{Channel: "email"}, as(appA)); err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 0 {
-		t.Fatalf("send.resolve wrote %d audit events, want none", len(events))
+	if len(e.audits.all()) != 0 {
+		t.Fatalf("send.resolve wrote %d audit events, want none", len(e.audits.all()))
 	}
 
 	got, err := sendTestHandler(e.deps)(bg, sendTestRequest{Channel: "email", Recipient: "ada@example.com", Body: "Hello"}, as(appA))
@@ -241,7 +238,7 @@ func TestSendAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 	var sends []*bridge.AuditEvent
-	for _, ev := range events {
+	for _, ev := range e.audits.all() {
 		if ev.Action == "dashboard.send.test" {
 			sends = append(sends, ev)
 		}

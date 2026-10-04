@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"maps"
+	"slices"
 	"sync"
 	"testing"
 
@@ -13,6 +14,7 @@ import (
 	dashcontract "github.com/xraph/forge/extensions/dashboard/contract"
 
 	"github.com/xraph/herald"
+	"github.com/xraph/herald/bridge"
 	"github.com/xraph/herald/driver"
 	"github.com/xraph/herald/id"
 	"github.com/xraph/herald/message"
@@ -70,21 +72,53 @@ func (d *fakeDriver) Send(_ context.Context, m *driver.OutboundMessage) (*driver
 }
 
 type env struct {
-	h    *herald.Herald
-	st   *memory.Store
-	drv  *fakeDriver
-	deps Deps
+	h      *herald.Herald
+	st     *memory.Store
+	drv    *fakeDriver
+	audits *auditLog
+	deps   Deps
 }
 
+// newEnv builds a Herald on a memory store with the fake driver, recording
+// every audit event into e.audits. Options passed in override all three.
 func newEnv(t *testing.T, opts ...herald.Option) *env {
 	t.Helper()
 	st := memory.New()
 	drv := &fakeDriver{vendorID: "vendor-1"}
-	h, err := herald.New(append([]herald.Option{herald.WithStore(st), herald.WithDriver(drv)}, opts...)...)
+	audits := &auditLog{}
+	base := []herald.Option{herald.WithStore(st), herald.WithDriver(drv), herald.WithChronicle(bridge.ChronicleFunc(audits.record))}
+	h, err := herald.New(append(base, opts...)...)
 	if err != nil {
 		t.Fatalf("herald.New: %v", err)
 	}
-	return &env{h: h, st: st, drv: drv, deps: Deps{Herald: h}}
+	return &env{h: h, st: st, drv: drv, audits: audits, deps: Deps{Herald: h}}
+}
+
+// auditLog collects audit events. It is safe for concurrent use.
+type auditLog struct {
+	mu     sync.Mutex
+	events []*bridge.AuditEvent
+}
+
+func (a *auditLog) record(_ context.Context, ev *bridge.AuditEvent) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.events = append(a.events, ev)
+	return nil
+}
+
+// all returns the events recorded so far, oldest first.
+func (a *auditLog) all() []*bridge.AuditEvent {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Clone(a.events)
+}
+
+// reset forgets every event recorded so far.
+func (a *auditLog) reset() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.events = nil
 }
 
 func withKey() herald.Option {

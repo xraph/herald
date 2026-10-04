@@ -1,15 +1,12 @@
 package contract
 
 import (
-	"context"
 	"reflect"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 
-	"github.com/xraph/herald"
-	"github.com/xraph/herald/bridge"
 	"github.com/xraph/herald/preference"
 )
 
@@ -127,31 +124,19 @@ func TestConcurrentOptOutsAreAllKept(t *testing.T) {
 }
 
 func TestPreferencesOptOutAuditsAndGetDoesNot(t *testing.T) {
-	var mu sync.Mutex
-	var events []*bridge.AuditEvent
-	rec := bridge.ChronicleFunc(func(_ context.Context, ev *bridge.AuditEvent) error {
-		mu.Lock()
-		defer mu.Unlock()
-		events = append(events, ev)
-		return nil
-	})
-	e := newEnv(t, herald.WithChronicle(rec))
+	e := newEnv(t)
 
 	if _, err := preferencesGetHandler(e.deps)(bg, preferencesGetRequest{UserID: "user-1"}, as(appA)); err != nil {
 		t.Fatal(err)
 	}
-	mu.Lock()
-	n := len(events)
-	mu.Unlock()
-	if n != 0 {
+	if n := len(e.audits.all()); n != 0 {
 		t.Fatalf("preferences.get wrote %d audit events, want none", n)
 	}
 
 	if _, err := preferencesOptOutHandler(e.deps)(bg, preferencesOptOutRequest{UserID: "user-1", Type: "auth.welcome", Channel: "sms"}, as(appA)); err != nil {
 		t.Fatal(err)
 	}
-	mu.Lock()
-	defer mu.Unlock()
+	events := e.audits.all()
 	if len(events) != 1 {
 		t.Fatalf("got %d audit events, want 1: %+v", len(events), events)
 	}

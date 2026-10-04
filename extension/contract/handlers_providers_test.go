@@ -1,13 +1,10 @@
 package contract
 
 import (
-	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 
-	"github.com/xraph/herald"
-	"github.com/xraph/herald/bridge"
 	"github.com/xraph/herald/id"
 	"github.com/xraph/herald/scope"
 )
@@ -247,12 +244,7 @@ func mustProviderID(t *testing.T, raw string) id.ProviderID {
 }
 
 func TestProviderCommandsAuditWithoutValues(t *testing.T) {
-	var events []*bridge.AuditEvent
-	rec := bridge.ChronicleFunc(func(_ context.Context, ev *bridge.AuditEvent) error {
-		events = append(events, ev)
-		return nil
-	})
-	e := newEnv(t, withKey(), herald.WithChronicle(rec))
+	e := newEnv(t, withKey())
 
 	created, err := providersCreateHandler(e.deps)(bg, providersCreateRequest{
 		Name: "primary", Channel: "email", Driver: "fake", Enabled: true,
@@ -274,10 +266,10 @@ func TestProviderCommandsAuditWithoutValues(t *testing.T) {
 	}
 
 	want := []string{"dashboard.providers.create", "dashboard.providers.update", "dashboard.providers.encryptStored", "dashboard.providers.delete"}
-	if len(events) != len(want) {
-		t.Fatalf("got %d audit events, want %d", len(events), len(want))
+	if len(e.audits.all()) != len(want) {
+		t.Fatalf("got %d audit events, want %d", len(e.audits.all()), len(want))
 	}
-	for i, ev := range events {
+	for i, ev := range e.audits.all() {
 		if ev.Action != want[i] || ev.ActorID != "operator-1" || ev.Tenant != appA {
 			t.Errorf("event %d = %+v", i, ev)
 		}

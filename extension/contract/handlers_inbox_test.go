@@ -1,12 +1,9 @@
 package contract
 
 import (
-	"context"
 	"testing"
 	"time"
 
-	"github.com/xraph/herald"
-	"github.com/xraph/herald/bridge"
 	"github.com/xraph/herald/id"
 	"github.com/xraph/herald/inbox"
 )
@@ -120,19 +117,14 @@ func TestInboxListPagesByCursor(t *testing.T) {
 }
 
 func TestInboxDeleteAndAudit(t *testing.T) {
-	var events []*bridge.AuditEvent
-	rec := bridge.ChronicleFunc(func(_ context.Context, ev *bridge.AuditEvent) error {
-		events = append(events, ev)
-		return nil
-	})
-	e := newEnv(t, herald.WithChronicle(rec))
+	e := newEnv(t)
 	notes := seedInbox(t, e, appA, "user-1", 2)
 
 	if _, err := inboxListHandler(e.deps)(bg, inboxListRequest{UserID: "user-1"}, as(appA)); err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 0 {
-		t.Fatalf("inbox.list wrote %d audit events, want none", len(events))
+	if len(e.audits.all()) != 0 {
+		t.Fatalf("inbox.list wrote %d audit events, want none", len(e.audits.all()))
 	}
 
 	ref := inboxIDRequest{ID: notes[0].ID.String()}
@@ -152,10 +144,10 @@ func TestInboxDeleteAndAudit(t *testing.T) {
 	}
 
 	want := []string{"dashboard.inbox.delete", "dashboard.inbox.markAllRead"}
-	if len(events) != len(want) {
-		t.Fatalf("got %d audit events, want %d: %+v", len(events), len(want), events)
+	if len(e.audits.all()) != len(want) {
+		t.Fatalf("got %d audit events, want %d: %+v", len(e.audits.all()), len(want), e.audits.all())
 	}
-	for i, ev := range events {
+	for i, ev := range e.audits.all() {
 		if ev.Action != want[i] || ev.ActorID != "operator-1" || ev.Tenant != appA {
 			t.Errorf("event %d = %+v", i, ev)
 		}
