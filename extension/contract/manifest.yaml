@@ -44,3 +44,5 @@ intents:
   - { name: inbox.markRead,    kind: command, version: 1, capability: write, invalidates: [inbox.list] }
   - { name: inbox.markAllRead, kind: command, version: 1, capability: write, invalidates: [inbox.list] }
   - { name: inbox.delete,      kind: command, version: 1, capability: write, invalidates: [inbox.list] }
+  - { name: preferences.get,    kind: query,   version: 1, capability: read }
+  - { name: preferences.optOut, kind: command, version: 1, capability: write, invalidates: [preferences.get] }
