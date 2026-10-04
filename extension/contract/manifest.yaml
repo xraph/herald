@@ -36,3 +36,5 @@ intents:
   - { name: versions.create,         kind: command, version: 1, capability: write, invalidates: [templates.list, templates.detail, templates.resolve, overview.stats] }
   - { name: versions.update,         kind: command, version: 1, capability: write, invalidates: [templates.list, templates.detail, templates.resolve, overview.stats] }
   - { name: versions.delete,         kind: command, version: 1, capability: write, invalidates: [templates.list, templates.detail, templates.resolve, overview.stats] }
+  - { name: messages.list,   kind: query, version: 1, capability: read }
+  - { name: messages.detail, kind: query, version: 1, capability: read }

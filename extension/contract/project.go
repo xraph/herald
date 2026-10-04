@@ -228,3 +228,39 @@ func variablesFromWire(in []VariableWire) []template.Variable {
 	}
 	return out
 }
+
+// ProviderRef points at a provider. Driver and Enabled are set where a page
+// needs them.
+type ProviderRef struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Driver  string `json:"driver,omitempty"`
+	Enabled *bool  `json:"enabled,omitempty"`
+}
+
+// MessageSummary is a delivery-log row.
+type MessageSummary struct {
+	ID           string       `json:"id"`
+	Recipient    string       `json:"recipient"`
+	Channel      string       `json:"channel"`
+	Status       string       `json:"status"`
+	TemplateSlug string       `json:"templateSlug,omitempty"`
+	Provider     *ProviderRef `json:"provider"`
+	Error        string       `json:"error,omitempty"`
+	CreatedAt    time.Time    `json:"createdAt"`
+	SentAt       *time.Time   `json:"sentAt,omitempty"`
+}
+
+// MessageDetail is every logged field of a message. Body holds the text part
+// only, truncated at the engine's truncateBodyAt; HTML bodies aren't logged.
+type MessageDetail struct {
+	MessageSummary
+	Subject           string            `json:"subject,omitempty"`
+	Body              string            `json:"body"`
+	Metadata          map[string]string `json:"metadata"`
+	Attempts          int               `json:"attempts"`
+	Async             bool              `json:"async"`
+	EnvID             string            `json:"envId,omitempty"`
+	ProviderMessageID string            `json:"providerMessageId,omitempty"`
+	Template          *TemplateRef      `json:"template"`
+}
