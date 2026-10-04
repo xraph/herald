@@ -88,6 +88,35 @@ func TestByIDIntentsNeverCrossApps(t *testing.T) {
 		{"send.resolve", map[string]any{"channel": "email", "providerId": pid}},
 		{"send.test", map[string]any{"channel": "email", "recipient": "a@example.com", "body": "x", "providerId": pid}},
 	}
+	// Every manifest intent is either a by-ID case above or named here as
+	// not by-ID. An intent in neither fails, so a new by-ID intent can't
+	// slip past this test.
+	notByID := map[string]bool{
+		"engine.info": true, "overview.stats": true,
+		"providers.list": true, "providers.create": true, "providers.encryptStored": true,
+		"templates.list": true, "templates.create": true, "templates.resetDefaults": true,
+		"messages.list": true, "inbox.list": true, "inbox.markAllRead": true,
+		"preferences.get": true, "preferences.optOut": true,
+		"scopes.list": true, "scopes.set": true, "scopes.delete": true,
+	}
+	byID := map[string]bool{}
+	for _, c := range cases {
+		byID[c.intent] = true
+		if notByID[c.intent] {
+			t.Errorf("%s is both a by-ID case and on the not-by-ID list", c.intent)
+		}
+	}
+	for intent := range intents {
+		if !byID[intent] && !notByID[intent] {
+			t.Errorf("%s is in neither the by-ID table nor the not-by-ID list", intent)
+		}
+	}
+	for intent := range notByID {
+		if _, declared := intents[intent]; !declared {
+			t.Errorf("%s is on the not-by-ID list but not in the manifest", intent)
+		}
+	}
+
 	for _, c := range cases {
 		cmd, declared := intents[c.intent]
 		if !declared {

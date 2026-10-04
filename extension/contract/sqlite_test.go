@@ -2,7 +2,9 @@ package contract
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/xraph/grove"
@@ -14,7 +16,8 @@ import (
 	sqlitestore "github.com/xraph/herald/store/sqlite"
 )
 
-func sqliteDeps(t *testing.T) Deps {
+// sqliteStore opens a fresh SQLite store in a temp directory.
+func sqliteStore(t *testing.T) *sqlitestore.Store {
 	t.Helper()
 	ctx := context.Background()
 	sdb := sqlitedriver.New()
@@ -30,12 +33,21 @@ func sqliteDeps(t *testing.T) Deps {
 	if err = s.Migrate(ctx); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	h, err := herald.New(herald.WithStore(s), herald.WithDriver(&fakeDriver{vendorID: "vendor-1"}))
+	return s
+}
+
+// sqliteDepsOn is an engine over s. Two engines over one store let a test
+// write plaintext with one and read it back through a keyed one.
+func sqliteDepsOn(t *testing.T, s *sqlitestore.Store, opts ...herald.Option) Deps {
+	t.Helper()
+	h, err := herald.New(append([]herald.Option{herald.WithStore(s), herald.WithDriver(&fakeDriver{vendorID: "vendor-1"})}, opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return Deps{Herald: h}
 }
+
+func sqliteDeps(t *testing.T) Deps { return sqliteDepsOn(t, sqliteStore(t)) }
 
 func TestSQLiteWrites(t *testing.T) {
 	deps := sqliteDeps(t)
@@ -94,7 +106,10 @@ func TestSQLiteWrites(t *testing.T) {
 		if second.Rule.ID != first.Rule.ID || second.Rule.Providers["email"] == nil {
 			t.Errorf("first %+v, second %+v", first.Rule, second.Rule)
 		}
-		list, _ := scopesListHandler(deps)(bg, scopesListRequest{}, as(appA))
+		list, err := scopesListHandler(deps)(bg, scopesListRequest{}, as(appA))
+		if err != nil {
+			t.Fatalf("scopes.list: %v", err)
+		}
 		if len(list.Rules) != 1 {
 			t.Errorf("rules = %d, want 1", len(list.Rules))
 		}
@@ -133,7 +148,81 @@ func TestSQLiteWrites(t *testing.T) {
 		}
 		second, err := messagesListHandler(deps)(bg, messagesListRequest{Limit: 2, Cursor: first.NextCursor}, as(appA))
 		if err != nil || len(second.Messages) != 1 || second.NextCursor != "" {
-			t.Errorf("page 2 = %+v, %v", second, err)
+			t.Fatalf("page 2 = %+v, %v", second, err)
+		}
+		all := append(append([]MessageSummary{}, first.Messages...), second.Messages...)
+		seen := map[string]bool{}
+		for i, m := range all {
+			seen[m.ID] = true
+			if i > 0 && m.CreatedAt.After(all[i-1].CreatedAt) {
+				t.Errorf("message %d is newer than the one before it across the pages", i)
+			}
+		}
+		if len(seen) != 3 {
+			t.Errorf("distinct messages over both pages = %d, want 3", len(seen))
 		}
 	})
+}
+
+// TestSQLiteKeyedCredentials runs the credential-protection path on a real
+// database: a plaintext row written before a key existed, one rewritten with
+// the key, and the migration that encrypts what is left.
+func TestSQLiteKeyedCredentials(t *testing.T) {
+	s := sqliteStore(t)
+	plain := sqliteDepsOn(t, s)
+	keyed := sqliteDepsOn(t, s, withKey())
+	mk := func(name string) *provider.Provider {
+		p := &provider.Provider{
+			AppID: appA, Name: name, Channel: "email", Driver: "fake",
+			Credentials: map[string]string{"api_key": canary}, Settings: map[string]string{}, Enabled: true,
+		}
+		if err := plain.Herald.CreateProvider(bg, p); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	updated, stored := mk("updated"), mk("stored")
+
+	check := func(label string, v any, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+		raw, merr := json.Marshal(v)
+		if merr != nil {
+			t.Fatal(merr)
+		}
+		if strings.Contains(string(raw), canary) || strings.Contains(string(raw), "enc:v1:") {
+			t.Errorf("%s leaked a credential: %s", label, raw)
+		}
+	}
+	protection := func(id string) string {
+		t.Helper()
+		got, err := providersDetailHandler(keyed)(bg, providersDetailRequest{ID: id}, as(appA))
+		check("providers.detail", got, err)
+		if len(got.Provider.Credentials) != 1 || got.Provider.Credentials[0].Key != "api_key" {
+			t.Fatalf("credentials = %+v", got.Provider.Credentials)
+		}
+		return got.Provider.Credentials[0].Protection
+	}
+	if got := protection(stored.ID.String()); got == "aes-256-gcm" {
+		t.Fatalf("a row written without a key reads as %q before encryptStored", got)
+	}
+
+	upd, err := providersUpdateHandler(keyed)(bg, providersUpdateRequest{
+		ID: updated.ID.String(), SetCredentials: map[string]string{"api_key": canary + "_2"},
+	}, as(appA))
+	check("providers.update", upd, err)
+	enc, err := providersEncryptStoredHandler(keyed)(bg, providersEncryptStoredRequest{}, as(appA))
+	check("providers.encryptStored", enc, err)
+	if enc.ValuesEncrypted != 1 {
+		t.Errorf("encryptStored = %+v, want exactly the one plaintext value", enc)
+	}
+	for name, p := range map[string]*provider.Provider{"updated": updated, "stored": stored} {
+		if got := protection(p.ID.String()); got != "aes-256-gcm" {
+			t.Errorf("%s provider's credential protection = %q, want aes-256-gcm", name, got)
+		}
+	}
+	list, err := providersListHandler(keyed)(bg, providersListRequest{}, as(appA))
+	check("providers.list", list, err)
 }

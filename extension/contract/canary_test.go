@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	dashcontract "github.com/xraph/forge/extensions/dashboard/contract"
+
 	"github.com/xraph/herald"
 )
 
@@ -76,21 +78,28 @@ func TestNoResponseCarriesACredential(t *testing.T) {
 			commands := []struct {
 				intent string
 				body   map[string]any
+				// refused is set for writes that must be turned away, so a
+				// refusal that quietly becomes a success path fails.
+				refused dashcontract.ErrorCode
 			}{
-				{"providers.create", map[string]any{"name": "second", "channel": "email", "driver": "fake", "enabled": true, "credentials": map[string]any{"api_key": canary}}},
-				{"providers.update", map[string]any{"id": pid, "setCredentials": map[string]any{"api_key": canary}}},
+				{"providers.create", map[string]any{"name": "second", "channel": "email", "driver": "fake", "enabled": true, "credentials": map[string]any{"api_key": canary}}, ""},
+				{"providers.update", map[string]any{"id": pid, "setCredentials": map[string]any{"api_key": canary}}, ""},
 				// Refused writes must not echo the value they refused.
-				{"providers.update", map[string]any{"id": pid, "setCredentials": map[string]any{"base_url": canary}}},
-				{"providers.create", map[string]any{"name": "bad", "channel": "email", "driver": "fake", "credentials": map[string]any{"host": canary, "api_key": canary}}},
+				{"providers.update", map[string]any{"id": pid, "setCredentials": map[string]any{"base_url": canary}}, dashcontract.CodeBadRequest},
+				{"providers.create", map[string]any{"name": "bad", "channel": "email", "driver": "fake", "credentials": map[string]any{"host": canary, "api_key": canary}}, dashcontract.CodeBadRequest},
 			}
 			if name == "keyed" {
 				commands = append(commands, struct {
-					intent string
-					body   map[string]any
-				}{"providers.encryptStored", map[string]any{}})
+					intent  string
+					body    map[string]any
+					refused dashcontract.ErrorCode
+				}{"providers.encryptStored", map[string]any{}, ""})
 			}
 			for _, c := range commands {
 				data, err := call(d, as(appA), c.intent, true, c.body)
+				if got := codeOf(err); got != c.refused {
+					t.Errorf("%s %v: error code %q (%v), want %q", c.intent, c.body, got, err, c.refused)
+				}
 				check(c.intent, data, err)
 			}
 		})
