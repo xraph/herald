@@ -1,6 +1,12 @@
 package contract
 
-import "testing"
+import (
+	"context"
+	"testing"
+
+	"github.com/xraph/herald"
+	"github.com/xraph/herald/bridge"
+)
 
 func ptr[T any](v T) *T { return &v }
 
@@ -22,7 +28,10 @@ func TestScopesSetMergesAndList(t *testing.T) {
 		t.Errorf("merged rule = %+v", got.Rule)
 	}
 	// An empty string clears a slot.
-	got, _ = scopesSetHandler(e.deps)(bg, scopesSetRequest{Scope: "org", ScopeID: "org-1", EmailProviderID: ptr("")}, as(appA))
+	got, err = scopesSetHandler(e.deps)(bg, scopesSetRequest{Scope: "org", ScopeID: "org-1", EmailProviderID: ptr("")}, as(appA))
+	if err != nil {
+		t.Fatalf("clearing a slot: %v", err)
+	}
 	if got.Rule.Providers["email"] != nil {
 		t.Errorf("cleared slot = %+v", got.Rule.Providers["email"])
 	}
@@ -48,7 +57,11 @@ func TestScopesSetMergesAndList(t *testing.T) {
 			t.Error("defaultLocaleUnused must be true: Send never reads a rule's default locale")
 		}
 	}
-	if theirs, _ := scopesListHandler(e.deps)(bg, scopesListRequest{}, as(appB)); len(theirs.Rules) != 0 {
+	theirs, err := scopesListHandler(e.deps)(bg, scopesListRequest{}, as(appB))
+	if err != nil {
+		t.Fatalf("app_b scopes.list: %v", err)
+	}
+	if len(theirs.Rules) != 0 {
 		t.Errorf("app_b sees %d of app_a's rules", len(theirs.Rules))
 	}
 }
@@ -84,7 +97,45 @@ func TestScopesDelete(t *testing.T) {
 	if _, err := scopesDeleteHandler(e.deps)(bg, scopesDeleteRequest{Scope: "user", ScopeID: "u-1"}, as(appA)); err != nil {
 		t.Fatal(err)
 	}
-	if list, _ := scopesListHandler(e.deps)(bg, scopesListRequest{}, as(appA)); len(list.Rules) != 0 {
+	list, err := scopesListHandler(e.deps)(bg, scopesListRequest{}, as(appA))
+	if err != nil {
+		t.Fatalf("scopes.list after delete: %v", err)
+	}
+	if len(list.Rules) != 0 {
 		t.Errorf("rules after delete = %+v", list.Rules)
+	}
+}
+
+func TestScopesAudit(t *testing.T) {
+	var events []*bridge.AuditEvent
+	rec := bridge.ChronicleFunc(func(_ context.Context, ev *bridge.AuditEvent) error {
+		events = append(events, ev)
+		return nil
+	})
+	e := newEnv(t, herald.WithChronicle(rec))
+
+	if _, err := scopesListHandler(e.deps)(bg, scopesListRequest{}, as(appA)); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("scopes.list wrote %d audit events, want none", len(events))
+	}
+	if _, err := scopesSetHandler(e.deps)(bg, scopesSetRequest{Scope: "org", ScopeID: "org-1", FromName: ptr("Org")}, as(appA)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scopesDeleteHandler(e.deps)(bg, scopesDeleteRequest{Scope: "org", ScopeID: "org-1"}, as(appA)); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"dashboard.scopes.set", "dashboard.scopes.delete"}
+	if len(events) != len(want) {
+		t.Fatalf("got %d audit events, want %d: %+v", len(events), len(want), events)
+	}
+	for i, ev := range events {
+		if ev.Action != want[i] || ev.ActorID != "operator-1" || ev.Tenant != appA {
+			t.Errorf("event %d = %+v", i, ev)
+		}
+		if ev.Metadata["scope"] != "org" || ev.Metadata["scope_id"] != "org-1" {
+			t.Errorf("event %d metadata = %+v", i, ev.Metadata)
+		}
 	}
 }
