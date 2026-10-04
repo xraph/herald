@@ -119,6 +119,10 @@ type Config struct {
 
     // GroveDatabase is the name of a grove.DB registered in the DI container.
     GroveDatabase string `json:"grove_database" yaml:"grove_database" mapstructure:"grove_database"`
+
+    // DashboardAppID is the app the dashboard manages when the session has
+    // no app_id claim.
+    DashboardAppID string `json:"dashboard_app_id" yaml:"dashboard_app_id" mapstructure:"dashboard_app_id"`
 }
 ```
 
@@ -128,6 +132,7 @@ type Config struct {
 | `DisableRoutes` | `bool` | `false` | When `true`, the extension does not register routes automatically. |
 | `DisableMigrate` | `bool` | `false` | When `true`, the extension skips automatic schema migration. |
 | `GroveDatabase` | `string` | `""` | Name of the Grove database in the DI container. Empty uses the default unnamed DB. |
+| `DashboardAppID` | `string` | `""` | `dashboard_app_id`: the app the dashboard manages when a session carries no `app_id` claim. A claim always wins. |
 | `CredentialsKey` | `string` | `""` | `credentials_key`: 32 bytes, standard base64. Encrypts provider credentials at rest. Supports `${ENV}` interpolation. |
 | `CredentialsKeyID` | `string` | `"k1"` | `credentials_key_id`: stored beside every value the key encrypts. Change it when you rotate. |
 | `PreviousCredentialsKeys` | `[]CredentialKeyConfig` | none | `previous_credentials_keys`: a list of `{id, key}`. They only decrypt, so values written under an older key keep working. |

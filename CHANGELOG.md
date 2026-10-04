@@ -34,6 +34,8 @@ An empty app ID matches only rows stored with `app_id = ''`, on every backend. I
 
 The same conformance suite now runs against all four backends. It runs the Postgres and Mongo cases when you set `HERALD_TEST_POSTGRES_DSN` and `HERALD_TEST_MONGO_URI`.
 
+Message and in-app notification lists now break `created_at` ties by ID on SQLite, Postgres and Mongo (newest first, then ID descending), as the memory store already did, so paging by offset no longer repeats or skips rows that share a timestamp. Every recipient of one multi-recipient send shares a timestamp, so this was common.
+
 ### Provider credentials
 
 - Herald can encrypt credentials at rest. Set `credentials_key` (32 bytes, standard base64) and optionally `credentials_key_id`. Each value is encrypted on its own and carries its key ID, so `previous_credentials_keys` keeps old values readable while you rotate.
@@ -64,6 +66,16 @@ Tenant isolation on the REST API rests on that middleware. Herald takes `app_id`
 - Discord keeps the query string already on your webhook URL when it adds `wait=true`.
 - Discord, Slack and webhook errors no longer contain the webhook URL, which carries its token.
 - `drivers/sendgrid` and `drivers/ses` still report one unused-code lint issue each (`sgResponse` and `sesMessage`). They were there before this release and we left them alone.
+
+### Dashboard contract
+
+The extension registers a `herald` contributor with forge's dashboard contract, so the React dashboard can manage Herald: providers, templates and their versions, the delivery log, a real test send, in-app inboxes, user preferences and routing rules. It needs forge v1.11.2 or later.
+
+The dashboard works on one app per session. It takes the `app_id` claim from the session when there is one, then `dashboard_app_id` from the extension config, then the `""` app. A session whose `app_id` claim is present but empty or not a string is refused, never moved to another app.
+
+Operators can opt a user out of a notification type on a channel. They can't opt a user back in, and the dashboard never deletes a preference record, because a missing record means the user gets everything.
+
+`api.ForgeAPI` no longer has its own routing check. `(*Herald).CheckRouting` is the same check, and the REST API and the dashboard both call it. `(*Herald).PreviewSend` tells you which provider and sender a send would use without sending anything. It also refuses a provider whose driver isn't registered on this server, with the same error `Send` returns. `send.test`, the dashboard's test send, refuses a request that gives both a template and a body.
 
 ### Still open
 
