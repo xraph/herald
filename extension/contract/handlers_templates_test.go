@@ -297,7 +297,8 @@ func (f *failingStore) DeleteTemplate(ctx context.Context, tid id.TemplateID) er
 	return f.Store.DeleteTemplate(ctx, tid)
 }
 
-// messageLogger records the message and fields of every Error call.
+// messageLogger records the message and fields of every Error call. Build it
+// on forge.NewNoopLogger so any other call is ignored instead of panicking.
 type messageLogger struct {
 	forge.Logger
 	entries []loggedEntry
@@ -329,7 +330,7 @@ func TestTemplatesCreateRollsBackWhenTheVersionFails(t *testing.T) {
 	t.Run("the template is removed and the version error is what comes back", func(t *testing.T) {
 		fs := &failingStore{Store: memory.New()}
 		e := newEnv(t, herald.WithStore(fs))
-		log := &messageLogger{}
+		log := &messageLogger{Logger: forge.NewNoopLogger()}
 		e.deps.Logger = log
 
 		_, err := create(e)
@@ -353,7 +354,7 @@ func TestTemplatesCreateRollsBackWhenTheVersionFails(t *testing.T) {
 	t.Run("a failed rollback is logged and does not change the response", func(t *testing.T) {
 		fs := &failingStore{Store: memory.New(), failDelete: true}
 		e := newEnv(t, herald.WithStore(fs))
-		log := &messageLogger{}
+		log := &messageLogger{Logger: forge.NewNoopLogger()}
 		e.deps.Logger = log
 
 		_, err := create(e)

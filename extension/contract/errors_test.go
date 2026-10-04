@@ -54,7 +54,8 @@ func TestMapError(t *testing.T) {
 }
 
 // recordingLogger counts Error calls so the test can see which errors get
-// logged. Only Error is exercised by Deps.mapError.
+// logged. Only Error is exercised by Deps.mapError; build it on
+// forge.NewNoopLogger so any other call is ignored instead of panicking.
 type recordingLogger struct {
 	forge.Logger
 	errors int
@@ -63,7 +64,7 @@ type recordingLogger struct {
 func (l *recordingLogger) Error(string, ...forge.Field) { l.errors++ }
 
 func TestDepsMapErrorLogsOnlyInternal(t *testing.T) {
-	log := &recordingLogger{}
+	log := &recordingLogger{Logger: forge.NewNoopLogger()}
 	d := Deps{Logger: log}
 	_ = d.mapError("x.y", store.ErrProviderNotFound)
 	if log.errors != 0 {
