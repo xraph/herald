@@ -2,6 +2,8 @@ package contract
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -205,7 +207,18 @@ func providersUpdateHandler(deps Deps) func(context.Context, providersUpdateRequ
 		if err != nil {
 			return providerResponse{}, deps.mapError("providers.update", err)
 		}
-		audit(ctx, deps, p, appID, "providers.update", "provider", prov.ID.String(), map[string]string{"name": prov.Name})
+		meta := map[string]string{"name": prov.Name}
+		for k, keys := range map[string][]string{
+			"set_credentials":    slices.Collect(maps.Keys(in.SetCredentials)),
+			"remove_credentials": in.RemoveCredentials,
+			"set_settings":       slices.Collect(maps.Keys(in.SetSettings)),
+			"remove_settings":    in.RemoveSettings,
+		} {
+			if len(keys) > 0 {
+				meta[k] = strings.Join(slices.Sorted(slices.Values(keys)), ",")
+			}
+		}
+		audit(ctx, deps, p, appID, "providers.update", "provider", prov.ID.String(), meta)
 		return providerResponse{Provider: projectProvider(deps.Herald, prov)}, nil
 	}
 }

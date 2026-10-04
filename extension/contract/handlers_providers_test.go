@@ -255,6 +255,8 @@ func TestProviderCommandsAuditWithoutValues(t *testing.T) {
 	}
 	if _, err := providersUpdateHandler(e.deps)(bg, providersUpdateRequest{
 		ID: created.Provider.ID, SetCredentials: map[string]string{"api_key": canary + "_2"},
+		SetSettings:    map[string]string{"from": "ops@example.com", "reply_to": "help@example.com"},
+		RemoveSettings: []string{"base_url"},
 	}, as(appA)); err != nil {
 		t.Fatal(err)
 	}
@@ -277,5 +279,20 @@ func TestProviderCommandsAuditWithoutValues(t *testing.T) {
 		if strings.Contains(string(raw), canary) || strings.Contains(string(raw), "enc:v1:") {
 			t.Errorf("event %d carries a credential value: %s", i, raw)
 		}
+	}
+	// The update names the keys it touched, sorted, and never their values.
+	update := e.audits.all()[1].Metadata
+	for k, want := range map[string]string{
+		"set_credentials": "api_key", "set_settings": "from,reply_to", "remove_settings": "base_url",
+	} {
+		if update[k] != want {
+			t.Errorf("update metadata %s = %q, want %q (all: %v)", k, update[k], want, update)
+		}
+	}
+	if _, ok := update["remove_credentials"]; ok {
+		t.Errorf("update metadata names remove_credentials when none were removed: %v", update)
+	}
+	if raw, _ := json.Marshal(update); strings.Contains(string(raw), "ops@example.com") {
+		t.Errorf("update metadata carries a setting value: %s", raw)
 	}
 }
