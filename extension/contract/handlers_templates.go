@@ -3,11 +3,16 @@ package contract
 import (
 	"context"
 	"encoding/json"
+	"regexp"
+	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/xraph/forge/extensions/dashboard/contract"
 	"github.com/xraph/forge/extensions/dashboard/contract/dispatcher"
 
+	"github.com/xraph/herald"
 	"github.com/xraph/herald/id"
 	"github.com/xraph/herald/template"
 )
@@ -45,6 +50,10 @@ func registerTemplates(d *dispatcher.Dispatcher, deps Deps) error {
 		func() error { return query(d, "templates.detail", templatesDetailHandler(deps)) },
 		func() error { return query(d, "templates.resolve", templatesResolveHandler(deps)) },
 		func() error { return query(d, "templates.render", templatesRenderHandler(deps)) },
+		func() error { return command(d, "templates.create", templatesCreateHandler(deps)) },
+		func() error { return command(d, "templates.update", templatesUpdateHandler(deps)) },
+		func() error { return command(d, "templates.delete", templatesDeleteHandler(deps)) },
+		func() error { return command(d, "templates.resetDefaults", templatesResetDefaultsHandler(deps)) },
 	} {
 		if err := bind(); err != nil {
 			return err
@@ -256,5 +265,236 @@ func templatesRenderHandler(deps Deps) func(context.Context, templatesRenderRequ
 			vars = variablesFromWire(*in.Variables)
 		}
 		return *template.NewRenderer().Preview(c, vars, in.Data), nil
+	}
+}
+
+var (
+	slugPattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
+	localePattern   = regexp.MustCompile(`^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$`)
+	variablePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
+	categories      = []string{template.CategoryAuth, template.CategoryTransactional, template.CategoryMarketing, template.CategorySystem}
+)
+
+func validChannel(ch string) bool {
+	return herald.ChannelType(ch).IsValid()
+}
+
+func validCategory(c string) bool { return slices.Contains(categories, c) }
+
+// validLocale accepts "" (the fallback version) or a BCP 47 style tag.
+func validLocale(l string) bool { return l == "" || localePattern.MatchString(l) }
+
+func validVariables(vars []VariableWire) error {
+	seen := map[string]bool{}
+	for _, v := range vars {
+		name := strings.TrimSpace(v.Name)
+		if !variablePattern.MatchString(name) {
+			return badRequest("variable names must be Go template field names (letters, digits, underscores)")
+		}
+		if seen[name] {
+			return badRequest("variable " + name + " is declared twice")
+		}
+		seen[name] = true
+	}
+	return nil
+}
+
+// versionContent is one locale's content in a create request.
+type versionContent struct {
+	Locale  string `json:"locale"`
+	Subject string `json:"subject"`
+	HTML    string `json:"html"`
+	Text    string `json:"text"`
+	Title   string `json:"title"`
+}
+
+type templatesCreateRequest struct {
+	Slug      string          `json:"slug"`
+	Name      string          `json:"name"`
+	Channel   string          `json:"channel"`
+	Category  string          `json:"category"`
+	Variables []VariableWire  `json:"variables"`
+	Version   *versionContent `json:"version"`
+}
+
+type templateResponse struct {
+	Template TemplateSummary `json:"template"`
+}
+
+// templatesCreateHandler creates a template and, optionally, its first
+// version. If the version can't be created the template is removed again,
+// so a create either lands whole or not at all.
+func templatesCreateHandler(deps Deps) func(context.Context, templatesCreateRequest, contract.Principal) (templateResponse, error) {
+	return func(ctx context.Context, in templatesCreateRequest, p contract.Principal) (templateResponse, error) {
+		appID, err := resolveApp(p, deps)
+		if err != nil {
+			return templateResponse{}, err
+		}
+		slug, name, channel := strings.TrimSpace(in.Slug), strings.TrimSpace(in.Name), strings.TrimSpace(in.Channel)
+		category := strings.TrimSpace(in.Category)
+		if category == "" {
+			category = template.CategoryTransactional
+		}
+		switch {
+		case !slugPattern.MatchString(slug):
+			return templateResponse{}, badRequest("slug must be lower-case letters, digits, dots, dashes or underscores")
+		case name == "":
+			return templateResponse{}, badRequest("name is required")
+		case !validChannel(channel):
+			return templateResponse{}, badRequest("channel is not one Herald supports")
+		case !validCategory(category):
+			return templateResponse{}, badRequest("category must be auth, transactional, marketing or system")
+		case in.Version != nil && !validLocale(strings.TrimSpace(in.Version.Locale)):
+			return templateResponse{}, badRequest("locale must be empty (the fallback) or a tag like en or pt-BR")
+		}
+		if verr := validVariables(in.Variables); verr != nil {
+			return templateResponse{}, verr
+		}
+
+		now := time.Now().UTC()
+		t := &template.Template{
+			ID: id.NewTemplateID(), AppID: appID, Slug: slug, Name: name, Channel: channel, Category: category,
+			Variables: variablesFromWire(in.Variables), Enabled: true, CreatedAt: now, UpdatedAt: now,
+		}
+		st := deps.Herald.Store()
+		if err = st.CreateTemplate(ctx, t); err != nil {
+			return templateResponse{}, deps.mapError("templates.create", err)
+		}
+		if in.Version != nil {
+			v := &template.Version{
+				ID: id.NewTemplateVersionID(), TemplateID: t.ID, Locale: strings.TrimSpace(in.Version.Locale),
+				Subject: in.Version.Subject, HTML: in.Version.HTML, Text: in.Version.Text, Title: in.Version.Title,
+				Active: true, CreatedAt: now, UpdatedAt: now,
+			}
+			if err = st.CreateVersion(ctx, v); err != nil {
+				_ = st.DeleteTemplate(ctx, t.ID) //nolint:errcheck // best-effort rollback; the version error is what the caller needs
+				return templateResponse{}, deps.mapError("templates.create", err)
+			}
+		}
+		saved, err := st.GetTemplate(ctx, t.ID)
+		if err != nil {
+			return templateResponse{}, deps.mapError("templates.create", err)
+		}
+		audit(ctx, deps, p, appID, "templates.create", "template", t.ID.String(), map[string]string{"slug": slug, "channel": channel})
+		return templateResponse{Template: projectTemplate(saved)}, nil
+	}
+}
+
+type templatesUpdateRequest struct {
+	ID        string          `json:"id"`
+	Name      *string         `json:"name"`
+	Category  *string         `json:"category"`
+	Enabled   *bool           `json:"enabled"`
+	Variables *[]VariableWire `json:"variables"`
+}
+
+// templatesUpdateHandler changes name, category, enabled and variables. A
+// template's slug and channel can't change: callers send by slug, and the
+// pair is the template's identity.
+func templatesUpdateHandler(deps Deps) func(context.Context, templatesUpdateRequest, contract.Principal) (templateResponse, error) {
+	return func(ctx context.Context, in templatesUpdateRequest, p contract.Principal) (templateResponse, error) {
+		appID, err := resolveApp(p, deps)
+		if err != nil {
+			return templateResponse{}, err
+		}
+		t, err := ownedTemplate(ctx, deps, appID, in.ID)
+		if err != nil {
+			return templateResponse{}, err
+		}
+		if in.Name != nil {
+			if strings.TrimSpace(*in.Name) == "" {
+				return templateResponse{}, badRequest("name is required")
+			}
+			t.Name = strings.TrimSpace(*in.Name)
+		}
+		if in.Category != nil {
+			if !validCategory(*in.Category) {
+				return templateResponse{}, badRequest("category must be auth, transactional, marketing or system")
+			}
+			t.Category = *in.Category
+		}
+		if in.Enabled != nil {
+			t.Enabled = *in.Enabled
+		}
+		if in.Variables != nil {
+			if err := validVariables(*in.Variables); err != nil {
+				return templateResponse{}, err
+			}
+			t.Variables = variablesFromWire(*in.Variables)
+		}
+		t.UpdatedAt = time.Now().UTC()
+		if err := deps.Herald.Store().UpdateTemplate(ctx, t); err != nil {
+			return templateResponse{}, deps.mapError("templates.update", err)
+		}
+		audit(ctx, deps, p, appID, "templates.update", "template", t.ID.String(), map[string]string{"slug": t.Slug})
+		return templateResponse{Template: projectTemplate(t)}, nil
+	}
+}
+
+type templatesDeleteRequest struct {
+	ID string `json:"id"`
+}
+
+func templatesDeleteHandler(deps Deps) func(context.Context, templatesDeleteRequest, contract.Principal) (deleteResponse, error) {
+	return func(ctx context.Context, in templatesDeleteRequest, p contract.Principal) (deleteResponse, error) {
+		appID, err := resolveApp(p, deps)
+		if err != nil {
+			return deleteResponse{}, err
+		}
+		t, err := ownedTemplate(ctx, deps, appID, in.ID)
+		if err != nil {
+			return deleteResponse{}, err
+		}
+		if err := deps.Herald.Store().DeleteTemplate(ctx, t.ID); err != nil {
+			return deleteResponse{}, deps.mapError("templates.delete", err)
+		}
+		audit(ctx, deps, p, appID, "templates.delete", "template", t.ID.String(), map[string]string{"slug": t.Slug})
+		return deleteResponse{OK: true, ID: t.ID.String()}, nil
+	}
+}
+
+type templatesResetDefaultsRequest struct{}
+
+type templatesResetDefaultsResponse struct {
+	Deleted int `json:"deleted"`
+	Seeded  int `json:"seeded"`
+}
+
+// templatesResetDefaultsHandler replaces the app's system templates with the
+// factory defaults. Custom templates are kept; edits to system ones are lost.
+func templatesResetDefaultsHandler(deps Deps) func(context.Context, templatesResetDefaultsRequest, contract.Principal) (templatesResetDefaultsResponse, error) {
+	return func(ctx context.Context, _ templatesResetDefaultsRequest, p contract.Principal) (templatesResetDefaultsResponse, error) {
+		appID, err := resolveApp(p, deps)
+		if err != nil {
+			return templatesResetDefaultsResponse{}, err
+		}
+		countSystem := func() (int, error) {
+			list, listErr := deps.Herald.Store().ListTemplates(ctx, appID)
+			if listErr != nil {
+				return 0, listErr
+			}
+			n := 0
+			for _, t := range list {
+				if t.IsSystem {
+					n++
+				}
+			}
+			return n, nil
+		}
+		before, err := countSystem()
+		if err != nil {
+			return templatesResetDefaultsResponse{}, deps.mapError("templates.resetDefaults", err)
+		}
+		if err = deps.Herald.ResetDefaultTemplates(ctx, appID); err != nil {
+			return templatesResetDefaultsResponse{}, deps.mapError("templates.resetDefaults", err)
+		}
+		after, err := countSystem()
+		if err != nil {
+			return templatesResetDefaultsResponse{}, deps.mapError("templates.resetDefaults", err)
+		}
+		audit(ctx, deps, p, appID, "templates.resetDefaults", "template", "", map[string]string{
+			"deleted": strconv.Itoa(before), "seeded": strconv.Itoa(after),
+		})
+		return templatesResetDefaultsResponse{Deleted: before, Seeded: after}, nil
 	}
 }

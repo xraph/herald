@@ -29,3 +29,10 @@ intents:
   - { name: templates.detail,  kind: query, version: 1, capability: read }
   - { name: templates.resolve, kind: query, version: 1, capability: read }
   - { name: templates.render,  kind: query, version: 1, capability: read }
+  - { name: templates.create,        kind: command, version: 1, capability: write, invalidates: [templates.list, templates.detail, templates.resolve, overview.stats, preferences.get] }
+  - { name: templates.update,        kind: command, version: 1, capability: write, invalidates: [templates.list, templates.detail, templates.resolve, overview.stats, preferences.get] }
+  - { name: templates.delete,        kind: command, version: 1, capability: write, invalidates: [templates.list, templates.detail, templates.resolve, overview.stats, preferences.get] }
+  - { name: templates.resetDefaults, kind: command, version: 1, capability: write, invalidates: [templates.list, templates.detail, templates.resolve, overview.stats, preferences.get] }
+  - { name: versions.create,         kind: command, version: 1, capability: write, invalidates: [templates.list, templates.detail, templates.resolve, overview.stats] }
+  - { name: versions.update,         kind: command, version: 1, capability: write, invalidates: [templates.list, templates.detail, templates.resolve, overview.stats] }
+  - { name: versions.delete,         kind: command, version: 1, capability: write, invalidates: [templates.list, templates.detail, templates.resolve, overview.stats] }

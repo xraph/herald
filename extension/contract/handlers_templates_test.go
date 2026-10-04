@@ -201,3 +201,70 @@ func TestTemplatesRender(t *testing.T) {
 		t.Errorf("an oversized buffer: %v, want BAD_REQUEST", err)
 	}
 }
+
+func TestTemplatesCreateUpdateDelete(t *testing.T) {
+	e := newEnv(t)
+	created, err := templatesCreateHandler(e.deps)(bg, templatesCreateRequest{
+		Slug: "auth.welcome", Name: "Welcome", Channel: "email", Category: "auth",
+		Variables: []VariableWire{{Name: "user_name", Required: true}},
+		Version:   &versionContent{Locale: "en", Subject: "Hi {{.user_name}}", Text: "Hello"},
+	}, as(appA))
+	if err != nil {
+		t.Fatalf("templates.create: %v", err)
+	}
+	if len(created.Template.Locales) != 1 || !created.Template.Locales[0].Active {
+		t.Errorf("created = %+v", created.Template)
+	}
+	if _, err = templatesCreateHandler(e.deps)(bg, templatesCreateRequest{Slug: "auth.welcome", Name: "Again", Channel: "email"}, as(appA)); codeOf(err) != "CONFLICT" {
+		t.Errorf("duplicate slug: %v, want CONFLICT", err)
+	}
+	if _, err = templatesCreateHandler(e.deps)(bg, templatesCreateRequest{Slug: "auth.welcome", Name: "Theirs", Channel: "email"}, as(appB)); err != nil {
+		t.Errorf("the same slug in another app: %v", err)
+	}
+
+	name, off := "Renamed", false
+	updated, err := templatesUpdateHandler(e.deps)(bg, templatesUpdateRequest{ID: created.Template.ID, Name: &name, Enabled: &off}, as(appA))
+	if err != nil || updated.Template.Name != "Renamed" || updated.Template.Enabled {
+		t.Fatalf("templates.update = %+v, %v", updated, err)
+	}
+	if updated.Template.Slug != "auth.welcome" || updated.Template.Channel != "email" {
+		t.Error("slug and channel must not change through update")
+	}
+
+	if _, err := templatesDeleteHandler(e.deps)(bg, templatesDeleteRequest{ID: created.Template.ID}, as(appB)); codeOf(err) != "NOT_FOUND" {
+		t.Errorf("delete from another app: %v", err)
+	}
+	if _, err := templatesDeleteHandler(e.deps)(bg, templatesDeleteRequest{ID: created.Template.ID}, as(appA)); err != nil {
+		t.Fatalf("templates.delete: %v", err)
+	}
+}
+
+func TestTemplatesCreateValidates(t *testing.T) {
+	e := newEnv(t)
+	for i, in := range []templatesCreateRequest{
+		{Slug: "", Name: "x", Channel: "email"},
+		{Slug: "Has Space", Name: "x", Channel: "email"},
+		{Slug: "ok", Name: " ", Channel: "email"},
+		{Slug: "ok", Name: "x", Channel: "carrier-pigeon"},
+		{Slug: "ok", Name: "x", Channel: "email", Category: "spam"},
+		{Slug: "ok", Name: "x", Channel: "email", Variables: []VariableWire{{Name: "a"}, {Name: "a"}}},
+		{Slug: "ok", Name: "x", Channel: "email", Variables: []VariableWire{{Name: "not valid"}}},
+		{Slug: "ok", Name: "x", Channel: "email", Version: &versionContent{Locale: "not a locale!"}},
+	} {
+		if _, err := templatesCreateHandler(e.deps)(bg, in, as(appA)); codeOf(err) != "BAD_REQUEST" {
+			t.Errorf("case %d: %v, want BAD_REQUEST", i, err)
+		}
+	}
+}
+
+func TestTemplatesResetDefaults(t *testing.T) {
+	e := newEnv(t)
+	got, err := templatesResetDefaultsHandler(e.deps)(bg, templatesResetDefaultsRequest{}, as(appA))
+	if err != nil || got.Seeded == 0 || got.Deleted != 0 {
+		t.Fatalf("first reset = %+v, %v", got, err)
+	}
+	again, err := templatesResetDefaultsHandler(e.deps)(bg, templatesResetDefaultsRequest{}, as(appA))
+	if err != nil || again.Deleted != got.Seeded || again.Seeded != got.Seeded {
+		t.Fatalf("second reset = %+v, %v; want it to replace the %d system templates", again, err, got.Seeded)
+	}
+}
