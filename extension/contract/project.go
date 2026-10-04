@@ -3,6 +3,7 @@ package contract
 import (
 	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/xraph/herald"
@@ -124,6 +125,106 @@ func projectSettings(h *herald.Herald, p *provider.Provider) []SettingEntry {
 			entry.Value = &v
 		}
 		out = append(out, entry)
+	}
+	return out
+}
+
+// LocaleState is one version's locale and whether it's live.
+type LocaleState struct {
+	Locale string `json:"locale"`
+	Active bool   `json:"active"`
+}
+
+// TemplateSummary is a template as list pages show it.
+type TemplateSummary struct {
+	ID          string        `json:"id"`
+	Slug        string        `json:"slug"`
+	Name        string        `json:"name"`
+	Channel     string        `json:"channel"`
+	Category    string        `json:"category"`
+	IsSystem    bool          `json:"isSystem"`
+	Enabled     bool          `json:"enabled"`
+	Locales     []LocaleState `json:"locales"`
+	HasFallback bool          `json:"hasFallback"`
+	UpdatedAt   time.Time     `json:"updatedAt"`
+}
+
+// VariableWire is a declared template variable.
+type VariableWire struct {
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	Required    bool   `json:"required"`
+	Default     string `json:"default,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+// VersionWire is one locale's content.
+type VersionWire struct {
+	ID        string    `json:"id"`
+	Locale    string    `json:"locale"`
+	Subject   string    `json:"subject"`
+	HTML      string    `json:"html"`
+	Text      string    `json:"text"`
+	Title     string    `json:"title"`
+	Active    bool      `json:"active"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// ResolutionEntry says which version answers a locale and how.
+type ResolutionEntry struct {
+	Locale    string  `json:"locale"`
+	VersionID *string `json:"versionId"`
+	Match     string  `json:"match"`
+}
+
+// TemplateDetail is a template with its variables and versions.
+type TemplateDetail struct {
+	TemplateSummary
+	Variables []VariableWire `json:"variables"`
+	Versions  []VersionWire  `json:"versions"`
+}
+
+func projectTemplate(t *template.Template) TemplateSummary {
+	locales := make([]LocaleState, 0, len(t.Versions))
+	for _, v := range t.Versions {
+		locales = append(locales, LocaleState{Locale: v.Locale, Active: v.Active})
+	}
+	return TemplateSummary{
+		ID: t.ID.String(), Slug: t.Slug, Name: t.Name, Channel: t.Channel, Category: t.Category,
+		IsSystem: t.IsSystem, Enabled: t.Enabled, Locales: locales, HasFallback: hasFallback(t), UpdatedAt: t.UpdatedAt,
+	}
+}
+
+func projectVersion(v *template.Version) VersionWire {
+	return VersionWire{
+		ID: v.ID.String(), Locale: v.Locale, Subject: v.Subject, HTML: v.HTML, Text: v.Text, Title: v.Title,
+		Active: v.Active, CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt,
+	}
+}
+
+func projectTemplateDetail(t *template.Template) TemplateDetail {
+	vars := make([]VariableWire, 0, len(t.Variables))
+	for _, v := range t.Variables {
+		vars = append(vars, VariableWire{Name: v.Name, Type: v.Type, Required: v.Required, Default: v.Default, Description: v.Description})
+	}
+	versions := make([]VersionWire, 0, len(t.Versions))
+	for i := range t.Versions {
+		versions = append(versions, projectVersion(&t.Versions[i]))
+	}
+	return TemplateDetail{TemplateSummary: projectTemplate(t), Variables: vars, Versions: versions}
+}
+
+func variablesFromWire(in []VariableWire) []template.Variable {
+	out := make([]template.Variable, 0, len(in))
+	for _, v := range in {
+		typ := strings.TrimSpace(v.Type)
+		if typ == "" {
+			typ = "string"
+		}
+		out = append(out, template.Variable{
+			Name: strings.TrimSpace(v.Name), Type: typ, Required: v.Required, Default: v.Default, Description: v.Description,
+		})
 	}
 	return out
 }

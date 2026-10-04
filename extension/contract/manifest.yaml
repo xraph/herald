@@ -22,3 +22,10 @@ intents:
   - { name: providers.update,        kind: command, version: 1, capability: write, invalidates: [providers.list, providers.detail, overview.stats, send.resolve, scopes.list] }
   - { name: providers.delete,        kind: command, version: 1, capability: write, invalidates: [providers.list, providers.detail, overview.stats, send.resolve, scopes.list] }
   - { name: providers.encryptStored, kind: command, version: 1, capability: write, invalidates: [providers.list, providers.detail, overview.stats] }
+  # templates.render has no cache entry on purpose: its params carry the whole
+  # editor buffer, and a cached preview of an older buffer is what the page
+  # must never show.
+  - { name: templates.list,    kind: query, version: 1, capability: read }
+  - { name: templates.detail,  kind: query, version: 1, capability: read }
+  - { name: templates.resolve, kind: query, version: 1, capability: read }
+  - { name: templates.render,  kind: query, version: 1, capability: read }
