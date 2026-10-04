@@ -2,6 +2,7 @@ package contract
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/xraph/forge/extensions/dashboard/contract"
@@ -10,6 +11,7 @@ import (
 	"github.com/xraph/herald/id"
 	"github.com/xraph/herald/message"
 	"github.com/xraph/herald/provider"
+	"github.com/xraph/herald/store"
 )
 
 const (
@@ -107,7 +109,8 @@ type messagesDetailResponse struct {
 
 // messagesDetailHandler shows one message. Its template is found from the
 // stored slug and channel (Herald logs the slug where the ID would go), and
-// is null when that template is gone.
+// is null only when that template is gone; any other store error is
+// mapped and returned.
 func messagesDetailHandler(deps Deps) func(context.Context, messagesDetailRequest, contract.Principal) (messagesDetailResponse, error) {
 	return func(ctx context.Context, in messagesDetailRequest, p contract.Principal) (messagesDetailResponse, error) {
 		appID, err := resolveApp(p, deps)
@@ -138,8 +141,14 @@ func messagesDetailHandler(deps Deps) func(context.Context, messagesDetailReques
 			detail.Metadata = map[string]string{}
 		}
 		if m.TemplateID != "" {
-			if t, err := deps.Herald.Store().GetTemplateBySlug(ctx, appID, m.TemplateID, m.Channel); err == nil {
+			t, err := deps.Herald.Store().GetTemplateBySlug(ctx, appID, m.TemplateID, m.Channel)
+			switch {
+			case err == nil:
 				detail.Template = &TemplateRef{ID: t.ID.String(), Slug: t.Slug, Channel: t.Channel}
+			case errors.Is(err, store.ErrTemplateNotFound):
+				// The template was deleted after the message was logged.
+			default:
+				return messagesDetailResponse{}, deps.mapError("messages.detail", err)
 			}
 		}
 		return messagesDetailResponse{Message: detail}, nil
