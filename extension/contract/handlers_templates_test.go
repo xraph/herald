@@ -3,6 +3,7 @@ package contract
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -378,4 +379,80 @@ func TestTemplatesCreateRollsBackWhenTheVersionFails(t *testing.T) {
 			t.Errorf("the orphan should be what the log reports: %v, %v", list, lerr)
 		}
 	})
+}
+
+// failOneDelete is a store whose DeleteTemplate fails for one template.
+type failOneDelete struct {
+	store.Store
+	failID string
+}
+
+func (f *failOneDelete) DeleteTemplate(ctx context.Context, tid id.TemplateID) error {
+	if tid.String() == f.failID {
+		return errors.New("locked")
+	}
+	return f.Store.DeleteTemplate(ctx, tid)
+}
+
+func TestTemplatesResetDefaultsCountsOnlyWhatWasDeleted(t *testing.T) {
+	fs := &failOneDelete{Store: memory.New()}
+	e := newEnv(t, herald.WithStore(fs))
+	reset := templatesResetDefaultsHandler(e.deps)
+	first, err := reset(bg, templatesResetDefaultsRequest{}, as(appA))
+	if err != nil || first.Seeded < 2 {
+		t.Fatalf("first reset = %+v, %v", first, err)
+	}
+	list, err := fs.ListTemplates(bg, appA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tm := range list {
+		if tm.IsSystem {
+			fs.failID = tm.ID.String()
+			break
+		}
+	}
+	e.audits.reset()
+
+	again, err := reset(bg, templatesResetDefaultsRequest{}, as(appA))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Deleted != first.Seeded-1 {
+		t.Errorf("deleted = %d, want %d: one of the %d deletes failed", again.Deleted, first.Seeded-1, first.Seeded)
+	}
+	events := e.audits.all()
+	if len(events) != 1 || events[0].Metadata["deleted"] != strconv.Itoa(first.Seeded-1) {
+		t.Errorf("audit events = %+v, want one saying %d were deleted", events, first.Seeded-1)
+	}
+}
+
+// failReread is a memory store whose GetTemplate always fails, so a create's
+// writes land and its re-read does not.
+type failReread struct{ store.Store }
+
+func (failReread) GetTemplate(context.Context, id.TemplateID) (*template.Template, error) {
+	return nil, errors.New("replica lagging")
+}
+
+func TestTemplatesCreateAuditsAWriteThatLandedEvenIfTheReReadFails(t *testing.T) {
+	fs := failReread{Store: memory.New()}
+	e := newEnv(t, herald.WithStore(fs))
+	_, err := templatesCreateHandler(e.deps)(bg, templatesCreateRequest{
+		Slug: "auth.welcome", Name: "Welcome", Channel: "email",
+		Version: &versionContent{Locale: "en", Text: "Hello"},
+	}, as(appA))
+	list, lerr := fs.ListTemplates(bg, appA)
+	if lerr != nil || len(list) != 1 {
+		t.Fatalf("templates = %v, %v; want the one that was written", list, lerr)
+	}
+	var creates int
+	for _, ev := range e.audits.all() {
+		if ev.Action == "dashboard.templates.create" && ev.ResourceID == list[0].ID.String() {
+			creates++
+		}
+	}
+	if creates != 1 {
+		t.Errorf("templates.create (err %v) wrote %d audit events for a template that exists, want 1", err, creates)
+	}
 }

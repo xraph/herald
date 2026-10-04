@@ -382,11 +382,13 @@ func templatesCreateHandler(deps Deps) func(context.Context, templatesCreateRequ
 				return templateResponse{}, deps.mapError("templates.create", err)
 			}
 		}
+		// Both writes have landed, so the audit goes first: a failed re-read
+		// below must not leave a template nobody recorded creating.
+		audit(ctx, deps, p, appID, "templates.create", "template", t.ID.String(), map[string]string{"slug": slug, "channel": channel})
 		saved, err := st.GetTemplate(ctx, t.ID)
 		if err != nil {
 			return templateResponse{}, deps.mapError("templates.create", err)
 		}
-		audit(ctx, deps, p, appID, "templates.create", "template", t.ID.String(), map[string]string{"slug": slug, "channel": channel})
 		return templateResponse{Template: projectTemplate(saved)}, nil
 	}
 }
@@ -479,33 +481,42 @@ func templatesResetDefaultsHandler(deps Deps) func(context.Context, templatesRes
 		if err != nil {
 			return templatesResetDefaultsResponse{}, err
 		}
-		countSystem := func() (int, error) {
+		// ResetDefaultTemplates logs a failed delete and carries on, so the
+		// deleted count is the system templates from before that are gone
+		// afterwards, not how many there were.
+		systemIDs := func() (map[string]bool, error) {
 			list, listErr := deps.Herald.Store().ListTemplates(ctx, appID)
 			if listErr != nil {
-				return 0, listErr
+				return nil, listErr
 			}
-			n := 0
+			ids := map[string]bool{}
 			for _, t := range list {
 				if t.IsSystem {
-					n++
+					ids[t.ID.String()] = true
 				}
 			}
-			return n, nil
+			return ids, nil
 		}
-		before, err := countSystem()
+		before, err := systemIDs()
 		if err != nil {
 			return templatesResetDefaultsResponse{}, deps.mapError("templates.resetDefaults", err)
 		}
 		if err = deps.Herald.ResetDefaultTemplates(ctx, appID); err != nil {
 			return templatesResetDefaultsResponse{}, deps.mapError("templates.resetDefaults", err)
 		}
-		after, err := countSystem()
+		after, err := systemIDs()
 		if err != nil {
 			return templatesResetDefaultsResponse{}, deps.mapError("templates.resetDefaults", err)
 		}
+		deleted := 0
+		for tid := range before {
+			if !after[tid] {
+				deleted++
+			}
+		}
 		audit(ctx, deps, p, appID, "templates.resetDefaults", "template", "", map[string]string{
-			"deleted": strconv.Itoa(before), "seeded": strconv.Itoa(after),
+			"deleted": strconv.Itoa(deleted), "seeded": strconv.Itoa(len(after)),
 		})
-		return templatesResetDefaultsResponse{Deleted: before, Seeded: after}, nil
+		return templatesResetDefaultsResponse{Deleted: deleted, Seeded: len(after)}, nil
 	}
 }
