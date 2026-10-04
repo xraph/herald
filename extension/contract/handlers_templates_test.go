@@ -4,8 +4,20 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/xraph/herald/id"
 	"github.com/xraph/herald/template"
 )
+
+// hasDiagnostic reports whether res has a diagnostic of kind whose message
+// contains substr.
+func hasDiagnostic(res template.PreviewResult, kind, substr string) bool {
+	for _, d := range res.Diagnostics {
+		if d.Kind == kind && strings.Contains(d.Message, substr) {
+			return true
+		}
+	}
+	return false
+}
 
 func TestTemplatesListAndDetail(t *testing.T) {
 	e := newEnv(t)
@@ -79,8 +91,22 @@ func TestTemplatesRender(t *testing.T) {
 	e := newEnv(t)
 	tmpl := e.template(t, appA, "auth.welcome", "email", "en")
 
-	// Stored variables are used when the request sends none.
+	// Stored variables are used when the request sends none: the stored
+	// required user_name has no value here, so only they can produce this.
 	got, err := templatesRenderHandler(e.deps)(bg, templatesRenderRequest{
+		TemplateID: tmpl.ID.String(),
+		Content:    template.Content{Subject: "Hi"},
+	}, as(appA))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasDiagnostic(got, template.KindMissing, `"user_name"`) {
+		t.Errorf("diagnostics = %+v, want a missing-required error for the stored user_name", got.Diagnostics)
+	}
+
+	// With the value supplied, the stored declaration covers .user_name: no
+	// undeclared warning, no missing error.
+	got, err = templatesRenderHandler(e.deps)(bg, templatesRenderRequest{
 		TemplateID: tmpl.ID.String(),
 		Content:    template.Content{Subject: "Hi {{.user_name}}", Text: "x\n  {{ index .user_name 99 }}"},
 		Data:       map[string]any{"user_name": "Ada"},
@@ -91,6 +117,9 @@ func TestTemplatesRender(t *testing.T) {
 	if got.Fields[0].Output != "Hi Ada" || !got.Fields[0].Rendered {
 		t.Errorf("subject = %+v", got.Fields[0])
 	}
+	if hasDiagnostic(got, template.KindUndeclared, "user_name") || hasDiagnostic(got, template.KindMissing, "user_name") {
+		t.Errorf("diagnostics = %+v, want user_name covered by the stored variables", got.Diagnostics)
+	}
 	var exec *template.Diagnostic
 	for i := range got.Diagnostics {
 		if got.Diagnostics[i].Kind == template.KindExec {
@@ -99,6 +128,33 @@ func TestTemplatesRender(t *testing.T) {
 	}
 	if exec == nil || exec.Field != "text" || exec.Line != 2 {
 		t.Errorf("exec diagnostic = %+v", exec)
+	}
+
+	// An empty variables list replaces the stored ones: user_name is no
+	// longer declared, so using it warns and it is no longer required.
+	none := []VariableWire{}
+	got, err = templatesRenderHandler(e.deps)(bg, templatesRenderRequest{
+		TemplateID: tmpl.ID.String(),
+		Content:    template.Content{Subject: "Hi {{.user_name}}"},
+		Data:       map[string]any{"user_name": "Ada"},
+		Variables:  &none,
+	}, as(appA))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasDiagnostic(got, template.KindUndeclared, "user_name") {
+		t.Errorf("diagnostics = %+v, want an undeclared warning once variables: [] replaces the stored ones", got.Diagnostics)
+	}
+	got, err = templatesRenderHandler(e.deps)(bg, templatesRenderRequest{
+		TemplateID: tmpl.ID.String(),
+		Content:    template.Content{Subject: "Hi"},
+		Variables:  &none,
+	}, as(appA))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasDiagnostic(got, template.KindMissing, "user_name") {
+		t.Errorf("diagnostics = %+v, want no missing error: variables: [] drops the stored required one", got.Diagnostics)
 	}
 
 	// Unsaved variable edits are honoured over the stored ones.
@@ -124,6 +180,20 @@ func TestTemplatesRender(t *testing.T) {
 	// A preview with no template at all still works (the create page uses it).
 	if _, err := templatesRenderHandler(e.deps)(bg, templatesRenderRequest{Content: template.Content{Text: "plain"}}, as(appA)); err != nil {
 		t.Errorf("render without a template: %v", err)
+	}
+
+	bigData := map[string]any{"blob": strings.Repeat("x", maxRenderBytes)}
+	if _, err := templatesRenderHandler(e.deps)(bg, templatesRenderRequest{Content: template.Content{Text: "plain"}, Data: bigData}, as(appA)); codeOf(err) != "BAD_REQUEST" {
+		t.Errorf("oversized data: %v, want BAD_REQUEST", err)
+	}
+	bigVars := []VariableWire{{Name: "v", Description: strings.Repeat("x", maxRenderBytes)}}
+	if _, err := templatesRenderHandler(e.deps)(bg, templatesRenderRequest{Content: template.Content{Text: "plain"}, Variables: &bigVars}, as(appA)); codeOf(err) != "BAD_REQUEST" {
+		t.Errorf("oversized variables: %v, want BAD_REQUEST", err)
+	}
+	// The cap is checked before the store: an oversized request naming a
+	// missing template still answers BAD_REQUEST, not NOT_FOUND.
+	if _, err := templatesRenderHandler(e.deps)(bg, templatesRenderRequest{TemplateID: id.NewTemplateID().String(), Data: bigData}, as(appA)); codeOf(err) != "BAD_REQUEST" {
+		t.Errorf("oversized data with an unknown template: %v, want BAD_REQUEST before any lookup", err)
 	}
 
 	big := strings.Repeat("x", maxRenderBytes+1)

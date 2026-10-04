@@ -2,6 +2,7 @@ package contract
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 
 	"github.com/xraph/forge/extensions/dashboard/contract"
@@ -11,9 +12,32 @@ import (
 	"github.com/xraph/herald/template"
 )
 
-// maxRenderBytes bounds the editor buffer a preview accepts. Previews run
-// on every pause in typing; a template larger than this is not a template.
+// maxRenderBytes bounds a whole preview request: the editor buffer plus the
+// JSON size of its sample data and variables. Previews run on every pause in
+// typing, and forge's transport puts no limit on a request body, so this is
+// the only cap.
 const maxRenderBytes = 256 << 10
+
+// renderRequestSize is the size templates.render measures against
+// maxRenderBytes. Data and variables count by their JSON encoding, the form
+// they arrived in.
+func renderRequestSize(in templatesRenderRequest) (int, error) {
+	c := in.Content
+	n := len(c.Subject) + len(c.HTML) + len(c.Text) + len(c.Title)
+	data, err := json.Marshal(in.Data)
+	if err != nil {
+		return 0, err
+	}
+	n += len(data)
+	if in.Variables != nil {
+		vars, err := json.Marshal(*in.Variables)
+		if err != nil {
+			return 0, err
+		}
+		n += len(vars)
+	}
+	return n, nil
+}
 
 func registerTemplates(d *dispatcher.Dispatcher, deps Deps) error {
 	for _, bind := range []func() error{
@@ -212,10 +236,14 @@ func templatesRenderHandler(deps Deps) func(context.Context, templatesRenderRequ
 		if err != nil {
 			return template.PreviewResult{}, err
 		}
-		c := in.Content
-		if len(c.Subject)+len(c.HTML)+len(c.Text)+len(c.Title) > maxRenderBytes {
-			return template.PreviewResult{}, badRequest("the template is too large to preview")
+		size, err := renderRequestSize(in)
+		if err != nil {
+			return template.PreviewResult{}, badRequest("the sample data could not be read")
 		}
+		if size > maxRenderBytes {
+			return template.PreviewResult{}, badRequest("the template and its sample data are too large to preview")
+		}
+		c := in.Content
 		var vars []template.Variable
 		if in.TemplateID != "" {
 			t, err := ownedTemplate(ctx, deps, appID, in.TemplateID)
