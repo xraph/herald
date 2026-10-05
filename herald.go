@@ -333,12 +333,30 @@ func applyFrom(out *driver.OutboundMessage, res *scope.ResolveResult, channel st
 			out.From = res.Config.FromPhone
 		}
 	}
+	if out.From == "" && channel == string(ChannelSMS) {
+		out.From = smsSender(prov.Settings)
+	}
 	if out.From == "" {
 		out.From = prov.Settings["from"]
 	}
 	if out.FromName == "" {
 		out.FromName = prov.Settings["from_name"]
 	}
+}
+
+// smsSender is the sender an SMS driver falls back to when no rule sets one.
+// The drivers keep it under their own setting key (twilio and vonage use
+// from_number, messagebird uses originator) and read it themselves when
+// OutboundMessage.From is empty, so filling From from the same key changes
+// nothing about the send. It makes PreviewSend report the sender the driver
+// will use instead of none.
+func smsSender(settings map[string]string) string {
+	for _, key := range []string{"from_number", "originator"} {
+		if v := settings[key]; v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // Notify sends a notification across multiple channels using a template.

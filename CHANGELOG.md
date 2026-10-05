@@ -77,6 +77,8 @@ Operators can opt a user out of a notification type on a channel. They can't opt
 
 `api.ForgeAPI` no longer has its own routing check. `(*Herald).CheckRouting` is the same check, and the REST API and the dashboard both call it. `(*Herald).PreviewSend` tells you which provider and sender a send would use without sending anything. It also refuses a provider whose driver isn't registered on this server, with the same error `Send` returns. `send.test`, the dashboard's test send, refuses a request that gives both a template and a body.
 
+With no rule from phone, an SMS send takes its sender from the driver's own setting: `from_number` for twilio and vonage, `originator` for messagebird. `PreviewSend` used to look only at a `from` setting, so it told you a twilio provider had no sender when it did. The send itself was always right, because each driver falls back to its own key.
+
 ### Still open
 
 - Mongo stores template variables and preference overrides as BSON binary (`json.RawMessage`), where Postgres uses JSONB. Changing it needs a data migration for existing documents.
