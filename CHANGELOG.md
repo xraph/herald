@@ -6,6 +6,7 @@ This release hardens providers, stores, templates and the REST API. Some of it b
 
 ### Breaking changes
 
+- The templ dashboard is gone. `github.com/xraph/herald/dashboard`, with its pages, widgets, settings panel and `RegisterBridge`, no longer exists. The React plugin in forge-dashboard replaces it, and `MIGRATION.md` lists where each page, action, widget and bridge function went. Herald needs forge v1.12.0 and no longer depends on templ or forgeui.
 - `message.Store` no longer has `UpdateMessageStatus`. It has `RecordDelivery(ctx, messageID, message.Delivery{Status, Error, ProviderMessageID, SentAt})`, which writes the whole outcome of a send in one call, and a new `CountMessages(ctx, appID, since)` that counts messages by status and channel. A store that lives outside this repo stops compiling until it implements both.
 - `SendResult.ProviderID` is now always Herald's own provider ID. The ID the vendor handed back moved to `SendResult.ProviderMessageID`. If you stored the old value to look a message up at the vendor, read the new field.
 - A send to someone who opted out returns the status `suppressed` and a message ID. It used to return `sent`, which was wrong, because nothing was sent.
@@ -43,7 +44,7 @@ Message and in-app notification lists now break `created_at` ties by ID on SQLit
 - A stored value that has the encrypted prefix but can't be read (`credential.ErrMalformed`) answers 400 over REST, not 500.
 - Credentials are decrypted at send time and nowhere else. If a provider's credentials were encrypted under a key that's no longer configured, `UpdateProvider` refuses with `ErrCredentialKeyUnavailable` and leaves the stored row alone.
 - Turning the key on doesn't touch what's already stored. Run `EncryptStoredCredentials(ctx, appID)` (or `POST /v1/providers/encrypt`) once for each app to encrypt its existing rows. A second run changes nothing.
-- The templ dashboard creates providers through the engine too, so they're validated and encrypted like any other. Rows it wrote before this release are still plaintext, and the one `EncryptStoredCredentials` run after you upgrade picks them up.
+- Providers the templ dashboard created before this release are still plaintext. The one `EncryptStoredCredentials` run after you upgrade picks them up.
 - Herald calls `Validate` when a provider is created or updated through the engine or the REST API. Providers seeded from `config.yaml` are validated too, but a failure there is logged and the provider is still created.
 - `SendRequest.ProviderID` sends through a chosen provider. One that belongs to another app fails with `ErrProviderNotFound` and nothing goes out.
 - Drivers can describe their fields: which ones they read, which are required, which are secret, and whether each one lives in credentials or settings. Every optional driver does.
@@ -69,7 +70,7 @@ Tenant isolation on the REST API rests on that middleware. Herald takes `app_id`
 
 ### Dashboard contract
 
-The extension registers a `herald` contributor with forge's dashboard contract, so the React dashboard can manage Herald: providers, templates and their versions, the delivery log, a real test send, in-app inboxes, user preferences and routing rules. It needs forge v1.11.2 or later.
+The extension registers a `herald` contributor with forge's dashboard contract, so the React dashboard can manage Herald: providers, templates and their versions, the delivery log, a real test send, in-app inboxes, user preferences and routing rules. It needs forge v1.12.0 or later.
 
 The dashboard works on one app per session. It takes the `app_id` claim from the session when there is one, then `dashboard_app_id` from the extension config, then the `""` app. A session whose `app_id` claim is present but empty, blank or not a string is refused, never moved to another app.
 
