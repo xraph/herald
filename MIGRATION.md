@@ -24,7 +24,8 @@ shell finds it.
 
 If your own code imports `github.com/xraph/herald/dashboard`, that import has
 to go, because the package no longer exists. That covers `dashboard.New`,
-`dashboard.NewManifest` and `dashboard.RegisterBridge`. Herald never called
+`dashboard.NewManifest`, `dashboard.RegisterBridge` and the exported
+`dashboard.Contributor` and `dashboard.DriverInfo` types. Herald never called
 `RegisterBridge` itself, so the 24 ForgeUI bridge functions (`herald.getOverview`
 and the rest) only ran if your application registered them on a bridge of its
 own. Nothing replaces them as bridge functions. Their work moved into contract
@@ -53,8 +54,10 @@ app. The templ dashboard showed the `""` app unless the URL carried an
 "Bugs found on the way").
 
 Herald needs forge v1.12.0. It's the first forge release whose dashboard
-packages import neither templ nor forgeui, so neither is in Herald's module
-graph any more. If a workspace `replace` or another module holds forge back,
+packages import neither templ nor forgeui, so neither appears in Herald's
+`go.mod` or `go.sum` any more. They aren't quite gone from the module graph:
+chronicle v1.6.0's `go.mod` still names both, and they leave once Herald moves
+to a chronicle release that has dropped them (chronicle main already has). If a workspace `replace` or another module holds forge back,
 lift it.
 
 Providers the templ dashboard created before v1.7.0 have plaintext credentials,
@@ -88,8 +91,8 @@ the engine and store fixes in full, so we don't repeat them here.
   screen as you typed it, and stayed there for anyone behind you until the page
   changed.
 - Enable, Disable and Delete on a provider or a template wrote straight to the
-  store and threw the result away. An enable that failed reloaded the page as
-  if it had worked. The bridge's create, update and toggle functions also went
+  store and skipped the engine. Enable and Disable also threw the result away.
+  An enable or disable that failed reloaded the page as if it had worked. The bridge's create, update and toggle functions also went
   straight to the store, so they skipped validation and encryption. Every
   write now goes through the engine and reports what happened.
 - Deleting a provider said nothing about the routing rules that named it, and
@@ -218,7 +221,7 @@ routes put them in the path, encoded.
 | "Send Test" button in the header | "Send test" in the nav | changed |
 | Stat card Providers, "N active" | the Posture panel's Providers section ("Nothing can send until you add one", or until you enable one), from `overview.stats` | changed: the panel says what's wrong instead of printing a count |
 | Stat card Templates, "Notification templates" | the Posture panel's Fallback coverage section: how many templates have no `""` version, linking to `/templates-without-fallback` | changed |
-| Stat card Messages, "Total sent", capped at 1,000 | the "Accepted by providers" table: a row per channel, a column per status that has rows, over 24 hours, 7 days or 30 days, from `overview.stats` | changed: the old figure counted every status and stopped at 1,000 |
+| Stat card Messages, "Total sent", capped at 1,000 | the "Messages by status and channel" table, captioned with the total and noting that "Accepted by provider" means the provider took the message: a row per channel, a column per status that has rows, over 24 hours, 7 days or 30 days, from `overview.stats` | changed: the old figure counted every status and stopped at 1,000 |
 | Stat card Failed, "N pending" | the same table's Failed column | changed: "pending" mixed three statuses |
 | Quick action "Add Provider" | "New provider" on the providers list | changed |
 | Quick action "Create Template" | "New template" on the templates list | changed |
@@ -241,7 +244,7 @@ routes put them in the path, encoded.
 | Column Name | Name, linking to the provider | migrated |
 | Column Channel, a coloured badge | Channel, plain text | changed: a channel is a category, not a signal |
 | Column Driver | Driver, mono | migrated |
-| Column Status, `EnabledBadge` | Status, enabled (outline) or disabled (secondary) | migrated |
+| Column Status, `EnabledBadge` ("Active" or "Disabled") | Status, enabled (outline) or disabled (secondary) | changed: see Shared components |
 | none | Priority and Credentials ("3 encrypted", "2 plaintext, 1 encrypted") | new |
 | none | a callout above the table when no credential key is configured | new |
 | Empty state "No providers found", "Create a provider to start sending notifications." | "No providers yet. Add one so Herald has somewhere to send." | changed |
@@ -284,6 +287,7 @@ routes put them in the path, encoded.
 | Quick link "View Messages", the messages list filtered to the provider's channel | none | dropped: a channel filter shows other providers' messages too. "Send a test through this provider" is there instead |
 | none | "Used by": the routing rules that name this provider | new |
 | none | "Edit", to `/providers/:id/edit`, where a secret can be replaced or removed but never shown | new |
+| Error banner with the store error when a delete failed | the error inside the delete confirm, which stays open | changed |
 | Error banner "Provider not found." | the page's not-found state | changed |
 
 ### Templates
@@ -302,10 +306,10 @@ routes put them in the path, encoded.
 | Column Slug, mono | Slug, mono | migrated |
 | Column Channel, badge | Channel, plain text | changed |
 | Column Category, `CategoryBadge` or a dash | Category | changed: plain text |
-| Column Status, `EnabledBadge` | Status | migrated |
+| Column Status, `EnabledBadge` ("Active" or "Disabled") | Status, enabled or disabled | changed: see Shared components |
 | none | Locales (inactive ones marked) and Origin (system or custom) | new |
 | none | "Reset system templates" (`templates.resetDefaults`) behind a confirm | new |
-| Empty state "No templates found", "Create a template to define notification content." | an empty table with "New template" | changed |
+| Empty state "No templates found", "Create a template to define notification content." | "No templates yet. Create one, or reset the system templates to get Herald's defaults.", or "No templates match these filters." | changed |
 | Category filtering in the page handler, after the store read | `templates.list` with a `category` parameter | changed |
 
 ### Template create
@@ -344,6 +348,7 @@ and Settings tabs and a "Review changes" diff before you save.
 | Empty state "No versions yet. Add a version to define notification content." | the rail's empty state | changed |
 | none | edit each version's subject, title, HTML and text in CodeMirror, with problems from `templates.render` on their line and column, and a preview with sample data | new: the templ dashboard couldn't edit a version |
 | none | put a version live or take it offline, and delete it (`versions.update`, `versions.delete`), with a confirm that says which locales fall back where | new |
+| Error banner with the store error when a delete failed | the error inside the delete confirm | changed |
 | Error banner "Template not found." | the page's not-found state | changed |
 
 ### Version create
@@ -355,7 +360,7 @@ and Settings tabs and a "Review changes" diff before you save.
 | Title "Add Version", "Create a new locale-specific content version." | the "Add locale" dialog in the workspace's locale rail | changed |
 | Field Locale, required, default `en` | Locale, checked against Herald's locale pattern and the locales already there | changed |
 | Fields Subject, Title, HTML Body, Text Body | none in the dialog: the new locale starts as a copy of the version you have open, unsaved edits included, and you edit it in the workspace | changed |
-| Version written live | `versions.create`, and the new locale starts inactive | changed: a new locale shouldn't answer sends before anyone has read it |
+| Version written live | `versions.create` with `active: false`, so the new locale starts inactive | changed: a new locale shouldn't answer sends before anyone has read it |
 | Error banner "Invalid template ID" | none: the dialog only exists inside a loaded template | dropped |
 
 ### Messages
@@ -384,7 +389,7 @@ and Settings tabs and a "Review changes" diff before you save.
 
 | templ | React | status |
 |---|---|---|
-| Title "Message Detail", "Delivery details for this notification." | "Message" | migrated |
+| Title "Message Detail", "Delivery details for this notification." | "Message to <recipient>" | changed |
 | "Retry" on a failed message, "Retry sending this message?" | "Send a test to this recipient" | dropped: see Deliberately dropped |
 | Fields ID, Recipient, Channel, Status, Subject, Created, Sent At | the same, from `messages.detail` | migrated |
 | Field Provider, linking to `providers/detail?id=` | Provider, linking to the provider when it still exists | migrated |
@@ -405,7 +410,7 @@ and Settings tabs and a "Review changes" diff before you save.
 |---|---|---|
 | Title "Inbox", "Manage in-app notifications for users." | "Inbox" | migrated |
 | User ID search with a 500 ms delay | User ID with a short debounce | migrated |
-| Badge "N unread" | the unread count beside "Mark all read" | migrated |
+| Badge "N unread" | the table caption, "N notifications on this page, N unread in total" | changed |
 | "Mark All Read", "Mark all notifications as read?" | "Mark all read" behind a confirm, `inbox.markAllRead` | migrated |
 | `mark_read` and `delete` handled on the server with no button anywhere | "Mark read" and "Delete" on each row, `inbox.markRead` and `inbox.delete` | changed: they were unreachable |
 | The newest 50 notifications | 25 per page with a cursor pager, `inbox.list` | changed |
@@ -449,6 +454,7 @@ and Settings tabs and a "Review changes" diff before you save.
 | Fields Subject and Body | Subject and Body when no template is picked | migrated |
 | "Send Test" submits straight away | "Send test" opens a confirm naming the provider, its driver, the channel and the recipient, and says so when the provider is disabled | changed |
 | Banner "Test notification sent successfully!" on any send without an error | a result for each outcome: "Accepted by" the provider with the vendor's ID and the note that delivery isn't confirmed, the provider's error in a `<pre>` for failed, the opt-out explained for suppressed | changed: the old banner called a suppressed send a success |
+| Error banner with `Send`'s error | an alert, "Herald refused the send", with the error | changed |
 | Card "Send Result": Message ID, Status, Provider, Error | the result card, plus a line when the message log couldn't be written, and when the provider that sent differs from the one you confirmed | changed |
 | `h.Send` with both a template and a body accepted | `send.test`, which refuses both | changed |
 
@@ -461,7 +467,7 @@ every page header.
 | templ | React | status |
 |---|---|---|
 | Card "General Configuration", "Current notification engine settings" | none as a page | changed: each value shows where it matters |
-| Default Locale | `defaultLocale`, used by the workspace's locale tester and Send test | changed |
+| Default Locale | `defaultLocale`: it decides which version the workspace opens first, prefills Send test's locale, and is named in the new template form's locale hint | changed |
 | Max Batch Size | `maxBatchSize` in `engine.info`, not displayed | dropped: see Deliberately dropped |
 | Truncate Body At, "N chars" | the note on a message's body, in bytes | changed: the limit is bytes |
 | Card "Registered Drivers": Driver and Channel | the driver list on the provider form, filtered by channel, with each driver's fields from its schema | changed |
@@ -520,7 +526,7 @@ caller sent), straight through the store unless noted.
 | `herald.createTemplate` | `templates.create` | changed: with its first version |
 | `herald.updateTemplate` | `templates.update` | changed: a partial update |
 | `herald.deleteTemplate` | `templates.delete` | migrated |
-| `herald.createVersion` | `versions.create` | changed: starts inactive |
+| `herald.createVersion` | `versions.create` | changed: takes `active` and defaults to live; the workspace sends false, so a locale added there starts inactive |
 | `herald.getMessages` | `messages.list` | changed: cursor paging |
 | `herald.getMessage` | `messages.detail` | changed: resolves the template slug and the provider |
 | `herald.getInbox` | `inbox.list` | changed: cursor paging |
@@ -558,9 +564,10 @@ them: `InboxTable` on Inbox, `MessageTable` on Messages and the overview,
 | `successBanner`, green | a status line | changed: the dashboard uses no green |
 | `maskCredential` | protection labels, never a value | changed: see Bugs found on the way |
 | `formatDate` and `formatDateTime`, with a dash for an empty time | the kit's `Timestamp` and "none" cells | changed |
-| `formatTimeAgo`, `msgTimeAgo` and `inboxTimeAgo` | the kit's `Timestamp` | changed |
-| `truncateString` and `truncateStr`, which cut bytes | wrapping text | changed |
-| `formatJSON` | none | dropped: never used |
+| `msgTimeAgo` and `inboxTimeAgo` | the kit's `Timestamp` | changed |
+| `truncateStr`, which cut the inbox title at 40 bytes | wrapping text | changed |
+| `channelIcon` and `channelWidgetIcon`, an icon per channel for the stat cards | none | dropped: channels are plain text |
+| `formatJSON`, `truncateString` and `formatTimeAgo` | none | dropped: never called |
 | A whole table row clickable through `hx-get` | a link in the row | changed |
 | Back buttons on every create and detail page | Cancel on create pages; the sidebar elsewhere | changed |
 | Browser `hx-confirm` dialogs | `ConfirmDialog`, which shows errors inside and can't close while a command runs | changed |
@@ -592,6 +599,7 @@ pages show them plainly where the templ ones didn't.
 - Two people editing one template at once: the workspace rebases your draft on
   each new answer from the server and only writes the fields you changed, but
   two saves of the same field still mean the last one wins.
-- `a-h/templ` and `forgeui` are out of Herald's module graph on forge v1.12.0.
-  If a later forge release pulls either back in through its own dashboard
-  packages, that's forge's dependency, not Herald's.
+- `a-h/templ` and `forgeui` are out of Herald's `go.mod` on forge v1.12.0, but
+  chronicle v1.6.0 still requires both, so `go mod graph` lists them until
+  Herald moves to a chronicle release without them. Chronicle main has already
+  dropped them; it needs a tag.
