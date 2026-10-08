@@ -3,8 +3,8 @@ module github.com/xraph/herald/drivers/webhook
 go 1.26.0
 
 require (
-	github.com/xraph/herald v1.6.1
-	github.com/xraph/relay v0.0.0
+	github.com/xraph/herald v1.7.0
+	github.com/xraph/relay v1.7.0
 )
 
 require (
@@ -17,15 +17,13 @@ require (
 	github.com/xraph/go-utils v1.3.0 // indirect
 	go.jetify.com/typeid/v2 v2.0.0-alpha.3 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
-	go.opentelemetry.io/otel v1.44.0 // indirect
-	go.opentelemetry.io/otel/metric v1.44.0 // indirect
-	go.opentelemetry.io/otel/trace v1.44.0 // indirect
+	go.opentelemetry.io/otel v1.47.0 // indirect
+	go.opentelemetry.io/otel/log v1.47.0 // indirect
+	go.opentelemetry.io/otel/metric v1.47.0 // indirect
+	go.opentelemetry.io/otel/trace v1.47.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/term v0.45.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 )
 
-replace (
-	github.com/xraph/herald => ../../
-	github.com/xraph/relay => ../../../relay
-)
+replace github.com/xraph/herald => ../../
