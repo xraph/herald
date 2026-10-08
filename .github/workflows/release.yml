@@ -47,11 +47,78 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
 
-      - name: Verify build
+      - name: Verify root module
         run: |
           go mod download
+          go mod tidy
+          git diff --exit-code go.mod go.sum
           go build ./...
           go test -race -count=1 ./...
+
+      # Every directory under drivers/ with its own go.mod is a separate Go
+      # module. Go resolves a nested module only through a tag prefixed with
+      # its path (drivers/slack/v1.7.0), so the root tag alone leaves them
+      # unfetchable. Discovering them here means a new driver ships without
+      # anyone having to remember to add it to a list.
+      - name: Discover driver sub-modules
+        id: drivers
+        run: |
+          DRIVERS=""
+          for gomod in drivers/*/go.mod; do
+            [ -f "$gomod" ] || continue
+            DRIVERS="$DRIVERS $(basename "$(dirname "$gomod")")"
+          done
+          DRIVERS="${DRIVERS# }"
+          if [ -z "$DRIVERS" ]; then
+            echo "::error::no driver sub-modules found under drivers/"
+            exit 1
+          fi
+          echo "Driver sub-modules: $DRIVERS"
+          echo "list=$DRIVERS" >> "$GITHUB_OUTPUT"
+
+      - name: Verify driver sub-modules
+        run: |
+          for mod in ${{ steps.drivers.outputs.list }}; do
+            echo "::group::Verifying drivers/$mod"
+            (
+              cd "drivers/$mod"
+              go mod download
+              go mod tidy
+              git diff --exit-code go.mod go.sum
+              go build ./...
+              go test -race -count=1 ./...
+            )
+            echo "::endgroup::"
+          done
+
+      - name: Tag driver sub-modules
+        run: |
+          TAG="${{ steps.set-tag.outputs.tag }}"
+          TARGET=$(git rev-parse "$TAG^{commit}")
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          NEW_TAGS=()
+          for mod in ${{ steps.drivers.outputs.list }}; do
+            MOD_TAG="drivers/$mod/$TAG"
+            # A re-run after a partial push finds some tags already there.
+            # Skip those, but refuse one that points at a different commit.
+            if git rev-parse -q --verify "refs/tags/$MOD_TAG" >/dev/null; then
+              if [ "$(git rev-parse "$MOD_TAG^{commit}")" != "$TARGET" ]; then
+                echo "::error::$MOD_TAG exists but does not point at $TAG ($TARGET)"
+                exit 1
+              fi
+              echo "$MOD_TAG already exists, skipping"
+              continue
+            fi
+            echo "Tagging $MOD_TAG"
+            git tag "$MOD_TAG" "$TARGET"
+            NEW_TAGS+=("$MOD_TAG")
+          done
+
+          if [ "${#NEW_TAGS[@]}" -gt 0 ]; then
+            git push origin "${NEW_TAGS[@]}"
+          fi
 
       - name: Generate release notes
         id: notes
@@ -60,11 +127,20 @@ jobs:
           if [ -z "$PREV_TAG" ]; then
             NOTES=$(git log --pretty=format:"- %s (%h)" HEAD)
           else
-            NOTES=$(git log --pretty=format:"- %s (%h)" ${PREV_TAG}..HEAD)
+            NOTES=$(git log --pretty=format:"- %s (%h)" "${PREV_TAG}..HEAD")
           fi
           {
             echo "notes<<EOF"
             echo "$NOTES"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          TAG="${{ steps.set-tag.outputs.tag }}"
+          {
+            echo "drivers<<EOF"
+            for mod in ${{ steps.drivers.outputs.list }}; do
+              echo "go get github.com/xraph/herald/drivers/$mod@$TAG"
+            done
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -83,5 +159,10 @@ jobs:
 
             ```bash
             go get github.com/xraph/herald@${{ steps.set-tag.outputs.tag }}
+            ```
+
+            Driver sub-modules:
+            ```bash
+            ${{ steps.notes.outputs.drivers }}
             ```
           generate_release_notes: true
