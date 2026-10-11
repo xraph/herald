@@ -36,7 +36,7 @@ const ExtensionName = "herald"
 const ExtensionDescription = "Unified multi-channel notification delivery engine"
 
 // ExtensionVersion is the semantic version.
-const ExtensionVersion = "1.7.0"
+const ExtensionVersion = "1.7.1"
 
 // Ensure Extension implements forge.Extension at compile time.
 var _ forge.Extension = (*Extension)(nil)
