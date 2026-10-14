@@ -42,7 +42,7 @@ func (r *Resolver) ResolveProvider(
 }
 ```
 
-The resolved result includes both the provider and the scoped configuration, so sender fields (`from_email`, `from_name`, `from_phone`, `default_locale`) are automatically applied.
+The resolved result includes both the provider and the scoped configuration, so the sender fields (`from_email`, `from_name`, `from_phone`) are applied automatically. A scope's `default_locale` is stored but `Send` doesn't read it yet.
 
 ## Per-Organization Email Provider
 
@@ -154,7 +154,7 @@ result, err = h.Send(ctx, &herald.SendRequest{
 ### Via HTTP API
 
 ```bash
-curl -X POST http://localhost:8080/herald/send \
+curl -X POST http://localhost:8080/herald/v1/send \
   -H "Content-Type: application/json" \
   -d '{
     "app_id": "myapp",
@@ -256,7 +256,8 @@ result, _ := h.Send(ctx, &herald.SendRequest{
     Data:     map[string]any{"name": "Jean", "invoice_id": "INV-001"},
 })
 
-// If Locale is empty, Herald falls back to the config default_locale ("en").
+// If Locale is empty, Herald uses the engine's DefaultLocale ("en" unless you set
+// herald.WithDefaultLocale). A scope's default_locale is not consulted.
 result, _ = h.Send(ctx, &herald.SendRequest{
     AppID:    "myapp",
     Channel:  "email",
@@ -323,10 +324,10 @@ result, _ = h.Send(ctx, &herald.SendRequest{
 
 ```bash
 # Get preferences
-curl "http://localhost:8080/herald/preferences?app_id=myapp&user_id=user-bob"
+curl "http://localhost:8080/herald/v1/preferences?app_id=myapp&user_id=user-bob"
 
 # Update preferences
-curl -X PUT http://localhost:8080/herald/preferences \
+curl -X PUT http://localhost:8080/herald/v1/preferences \
   -H "Content-Type: application/json" \
   -d '{
     "app_id": "myapp",
@@ -396,7 +397,7 @@ Resolution results:
 
 ```bash
 # Set app-level config
-curl -X PUT http://localhost:8080/herald/config/app \
+curl -X PUT http://localhost:8080/herald/v1/config/app \
   -H "Content-Type: application/json" \
   -d '{
     "app_id": "myapp",
@@ -406,7 +407,7 @@ curl -X PUT http://localhost:8080/herald/config/app \
   }'
 
 # Set org-level config
-curl -X PUT http://localhost:8080/herald/config/org/org-acme \
+curl -X PUT http://localhost:8080/herald/v1/config/org/org-acme \
   -H "Content-Type: application/json" \
   -d '{
     "app_id": "myapp",
@@ -416,7 +417,7 @@ curl -X PUT http://localhost:8080/herald/config/org/org-acme \
   }'
 
 # Set user-level config
-curl -X PUT http://localhost:8080/herald/config/user/user-ceo-acme \
+curl -X PUT http://localhost:8080/herald/v1/config/user/user-ceo-acme \
   -H "Content-Type: application/json" \
   -d '{
     "app_id": "myapp",
@@ -425,10 +426,10 @@ curl -X PUT http://localhost:8080/herald/config/user/user-ceo-acme \
   }'
 
 # List all configs for an app
-curl "http://localhost:8080/herald/config?app_id=myapp"
+curl "http://localhost:8080/herald/v1/config?app_id=myapp"
 
 # Delete an org config
-curl -X DELETE "http://localhost:8080/herald/config/org/org-acme?app_id=myapp"
+curl -X DELETE "http://localhost:8080/herald/v1/config/org/org-acme?app_id=myapp"
 ```
 
 ## Pattern Summary

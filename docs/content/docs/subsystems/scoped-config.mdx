@@ -3,7 +3,7 @@ title: Scoped Configuration
 description: Configure per-scope provider overrides, sender info, and default locale through Herald's resolution chain.
 ---
 
-Herald's scoped configuration system allows notification settings to be customized at three levels: **App**, **Org** (organization), and **User**. Each scope can override which provider handles a channel, what sender information is used, and what default locale applies. The resolver walks the scope chain from most specific to least specific to determine the final configuration.
+Herald's scoped configuration system allows notification settings to be customized at three levels: app, org (organization) and user. Each scope can override which provider handles a channel and what sender information is used. (A scope can also store a default locale, but nothing reads it yet.) The resolver walks the scope chain from most specific to least specific to determine the final configuration.
 
 ## Resolution Chain
 
@@ -173,7 +173,7 @@ orgConfig := &scope.Config{
 
 ## Default Locale
 
-Each scope can set a `DefaultLocale` that influences which template version is rendered:
+Each scope can store a `DefaultLocale`, but `Send` doesn't read it yet. The dashboard marks it as unused. The fields are there so you can set them now:
 
 ```go
 appConfig := &scope.Config{
@@ -192,9 +192,10 @@ orgConfig := &scope.Config{
 ```
 
 When sending a notification, the locale is resolved in this order:
-1. Explicit `Locale` field on the send request
-2. Scoped config `DefaultLocale` from the resolved scope
-3. Herald's global `DefaultLocale` (default: `"en"`)
+1. The `Locale` field on the send request
+2. Herald's global `DefaultLocale` (default: `"en"`)
+
+The scoped `DefaultLocale` is skipped.
 
 ## Store Interface
 
@@ -240,7 +241,7 @@ Scoped configuration is managed through the `/config` route group:
 ### Set Org Config Example
 
 ```
-PUT /herald/config/org/org_01acme...
+PUT /herald/v1/config/org/org_01acme...
 ```
 
 ```json

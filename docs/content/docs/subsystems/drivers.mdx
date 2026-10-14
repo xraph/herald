@@ -266,7 +266,7 @@ h, err := herald.New(
 
 ## Writing a Custom Driver
 
-To add support for a new notification service, implement the `Driver` interface:
+To add support for a new notification service, implement the `Driver` interface. The example below sketches an SES driver to show the shape. You don't need to write that one: Herald already ships it as the `github.com/xraph/herald/drivers/ses` module, registered with `&ses.Driver{}`.
 
 ```go
 package ses

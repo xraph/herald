@@ -61,7 +61,7 @@ POST /herald/v1/send
 | `user_id` | string | No | User ID for preference checking and scope resolution |
 | `env_id` | string | No | Environment ID |
 | `metadata` | object | No | User-defined key-value metadata |
-| `async` | boolean | No | Whether to send asynchronously |
+| `async` | boolean | No | Stored on the message row only. Herald ignores it and sends synchronously |
 
 **Response (200):**
 
@@ -74,6 +74,8 @@ POST /herald/v1/send
   "logged": true
 }
 ```
+
+With several addresses in `to`, every one is sent and logged, but the response carries only the first recipient's result. Query `/herald/v1/messages` for the rest.
 
 `provider_id` is always Herald's own provider ID. The ID the vendor handed back, when it gave one, is `provider_message_id`. `logged` is false when the message log couldn't be written; the send still happened. A user who opted out gets `status: "suppressed"` and a message ID, and nothing is sent.
 
@@ -113,7 +115,7 @@ POST /herald/v1/notify
 | `org_id` | string | No | Organization ID |
 | `env_id` | string | No | Environment ID |
 | `metadata` | object | No | User-defined metadata |
-| `async` | boolean | No | Whether to send asynchronously |
+| `async` | boolean | No | Stored on the message row only. Herald ignores it and sends synchronously |
 
 **Response (200):**
 

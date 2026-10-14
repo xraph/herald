@@ -11,7 +11,7 @@ Herald provides two methods for sending notifications, each suited to different 
 
 ### engine.Send()
 
-`Send` delivers a notification on a **single channel** to one or more recipients. You specify the channel, and optionally a template or raw content:
+`Send` delivers a notification on a single channel to one or more recipients. You specify the channel, and optionally a template or raw content:
 
 ```go
 result, err := h.Send(ctx, &herald.SendRequest{
@@ -41,7 +41,7 @@ result, err := h.Send(ctx, &herald.SendRequest{
 
 ### engine.Notify()
 
-`Notify` sends a template-based notification across **multiple channels** in a single call. Herald iterates over the specified channels and calls `Send` for each one:
+`Notify` sends a template-based notification across several channels in a single call. Herald iterates over the specified channels and calls `Send` for each one:
 
 ```go
 results, err := h.Notify(ctx, &herald.NotifyRequest{
@@ -57,7 +57,7 @@ results, err := h.Notify(ctx, &herald.NotifyRequest{
 })
 ```
 
-If delivery fails on one channel, Herald logs a warning and continues with the remaining channels. The returned `[]*SendResult` slice contains one result per channel.
+If `Send` returns an error on one channel (no provider, a missing template), Herald logs a warning, adds a `failed` result for it and carries on with the remaining channels. The returned `[]*SendResult` slice contains one result per channel. Each of those is the result for the first address in `To` only (see below).
 
 ## Delivery Pipeline Steps
 
@@ -70,13 +70,13 @@ If a `UserID` and `Template` are provided, Herald checks whether the user has op
 ```go
 if req.UserID != "" && req.Template != "" {
     pref, _ := h.store.GetPreference(ctx, req.AppID, req.UserID)
-    if pref != nil && pref.IsOptedOut(req.Template, channel) {
-        return &SendResult{Status: message.StatusSent, Error: "user opted out"}, nil
+    if pref != nil && pref.IsOptedOut(req.Template, req.Channel) {
+        return h.suppress(ctx, req), nil
     }
 }
 ```
 
-If the user has opted out, Herald returns early without sending. See [Preferences](/docs/subsystems/preferences) for details.
+If the user has opted out, Herald writes a message row with status `suppressed` for each recipient, records an audit event, and returns a `suppressed` result without calling a driver. See [Preferences](/docs/subsystems/preferences) for details.
 
 ### 2. Template Resolution and Rendering
 
@@ -101,7 +101,7 @@ User scope -> Org scope -> App scope -> Priority-based fallback
 resolved, err := h.resolver.ResolveProvider(ctx, req.AppID, req.OrgID, req.UserID, channel)
 ```
 
-The resolver returns both the `Provider` and any `Config` overrides (sender info, locale). If no provider is found at any level, Herald returns `ErrNoProviderConfigured`.
+The resolver returns both the `Provider` and any `Config` overrides for sender info. (`Config` also has a `DefaultLocale` field, but `Send` doesn't read it: the locale comes from the request or the engine's default.) If no provider is found at any level, Herald returns `ErrNoProviderConfigured`. A request with `ProviderID` set skips the resolver.
 
 ### 4. Driver Lookup
 
@@ -135,7 +135,7 @@ if resolved.Config != nil {
 
 ### 6. Delivery and Logging
 
-For each recipient, Herald creates a message log entry, sends via the driver, and updates the status:
+For each recipient, Herald creates a message log entry, sends via the driver, and updates the status. The code below is simplified:
 
 ```go
 msg := &message.Message{
@@ -160,7 +160,7 @@ _ = h.store.RecordDelivery(ctx, msg.ID, d)
 
 ### 7. Inbox Entry (In-App Channel)
 
-When the channel is `inapp` and a `UserID` is provided, Herald also creates an inbox notification entry:
+When the channel is `inapp`, a `UserID` is provided and the delivery succeeded, Herald also creates an inbox notification entry:
 
 ```go
 if channel == string(ChannelInApp) && req.UserID != "" {
@@ -180,19 +180,20 @@ if channel == string(ChannelInApp) && req.UserID != "" {
 Every notification delivery is logged as a `message.Message` record. Messages progress through these states:
 
 ```
-queued -> sending -> sent -> delivered
-                  \-> failed
-                  \-> bounced
+sending -> sent
+        \-> failed
+suppressed (opted out, never sent)
 ```
 
 | Status | Description |
 |--------|-------------|
-| `queued` | Message is queued for delivery (async mode) |
-| `sending` | Herald is actively attempting delivery |
+| `queued` | Declared, but nothing sets it today |
+| `sending` | Written when the message row is created, before the driver is called |
 | `sent` | The driver accepted the message |
-| `delivered` | Delivery confirmed by the provider (e.g., webhook callback) |
-| `failed` | Delivery failed after all attempts |
-| `bounced` | The recipient address bounced |
+| `delivered` | Declared for provider confirmations; nothing records it on a message today |
+| `failed` | The driver returned an error (there is one attempt, no retries) |
+| `bounced` | Declared, but nothing sets it today |
+| `suppressed` | The user opted out, so nothing was sent |
 
 ```go
 const (
@@ -202,6 +203,8 @@ const (
     StatusFailed    Status = "failed"
     StatusBounced   Status = "bounced"
     StatusDelivered Status = "delivered"
+
+    StatusSuppressed Status = "suppressed"
 )
 ```
 
@@ -233,26 +236,9 @@ type Message struct {
 
 Message IDs use the `hmsg` prefix. The `Body` field is truncated to the configured `TruncateBodyAt` limit (default: 4096 characters) to keep the delivery log compact.
 
-## Sync vs Async
+## Sync and async
 
-The `Async` flag on `SendRequest` and `NotifyRequest` controls the delivery mode:
-
-- **Sync (default)**: `Send` blocks until the driver returns a result. The caller receives the final status immediately.
-- **Async**: The message is initially recorded with status `queued`. Delivery happens in the background.
-
-```go
-result, err := h.Send(ctx, &herald.SendRequest{
-    AppID:    "app_01abc...",
-    Channel:  "email",
-    Template: "auth.welcome",
-    To:       []string{"alice@example.com"},
-    Async:    true, // return immediately, deliver in background
-    Data: map[string]any{
-        "user_name": "Alice",
-        "app_name":  "MyApp",
-    },
-})
-```
+`SendRequest` and `NotifyRequest` have an `Async` flag, but Herald doesn't act on it yet. It's copied onto the message row and that's all. Every send is synchronous: `Send` blocks until the driver returns, and you get the final status back. If you need sends off the request path, run them in your own goroutine or queue.
 
 ## Metadata
 
@@ -271,16 +257,20 @@ The return value of `Send` contains the outcome:
 
 ```go
 type SendResult struct {
-    MessageID  id.MessageID   `json:"message_id"`
-    Status     message.Status `json:"status"`
-    ProviderID string         `json:"provider_id,omitempty"`
-    Error      string         `json:"error,omitempty"`
+    MessageID         id.MessageID   `json:"message_id"`
+    Status            message.Status `json:"status"`
+    ProviderID        string         `json:"provider_id,omitempty"`
+    ProviderMessageID string         `json:"provider_message_id,omitempty"`
+    Error             string         `json:"error,omitempty"`
+    Logged            bool           `json:"logged"`
 }
 ```
 
+`Send` logs one message per address in `To`, but it returns only the first recipient's result. If you pass several addresses and need every outcome, send them one at a time or query the message log. `Logged` is false when the log row couldn't be written; the send still happened.
+
 ## API Endpoints
 
-The delivery pipeline is exposed through two API routes:
+The delivery pipeline is exposed through two API routes, under the extension's base path plus `/v1` (for example `/herald/v1/send`):
 
 | Method | Path | Operation |
 |--------|------|-----------|

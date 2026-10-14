@@ -7,7 +7,7 @@ Herald can run standalone or as a Forge extension. Both modes share the same cor
 
 ## herald.Config
 
-**Import:** `github.com/xraph/herald`
+Import: `github.com/xraph/herald`
 
 The root `Config` struct controls core notification delivery behavior:
 
@@ -16,7 +16,7 @@ type Config struct {
     // DefaultLocale is the default locale for template rendering (default: "en").
     DefaultLocale string
 
-    // MaxBatchSize is the maximum number of notifications per batch send.
+    // MaxBatchSize is stored, but nothing reads it yet.
     MaxBatchSize int
 
     // TruncateBodyAt is the maximum message body length stored in the delivery log.
@@ -30,7 +30,7 @@ type Config struct {
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `DefaultLocale` | `string` | `"en"` | BCP 47 locale tag used when a `SendRequest` does not specify a locale. |
-| `MaxBatchSize` | `int` | `100` | Maximum recipients per batch send via `Herald.Notify`. |
+| `MaxBatchSize` | `int` | `100` | Stored, but nothing reads it yet. `Send` and `Notify` don't cap the number of recipients. |
 | `TruncateBodyAt` | `int` | `4096` | Maximum character length for the `Body` field in delivery log messages. Set to `0` to disable truncation. |
 
 ### DefaultConfig
@@ -68,11 +68,12 @@ h, err := herald.New(
 
 | Option | Description |
 |--------|-------------|
-| `WithStore(s store.Store)` | Sets the persistence backend. **Required**: Herald returns `ErrNoStore` without it. |
+| `WithStore(s store.Store)` | Sets the persistence backend. Required: Herald returns `ErrNoStore` without it. |
 | `WithLogger(l *slog.Logger)` | Sets the structured logger. Defaults to `slog.Default()`. |
 | `WithDriver(d driver.Driver)` | Registers a notification driver (SMTP, Twilio, FCM, etc.). Can be called multiple times. |
 | `WithDefaultLocale(locale string)` | Overrides the default locale for template rendering. |
-| `WithMaxBatchSize(n int)` | Overrides the maximum batch size. |
+| `WithMaxBatchSize(n int)` | Sets `MaxBatchSize`, which nothing reads yet. |
+| `WithChronicle(c bridge.Chronicle)` | Sends audit events to this Chronicle bridge. |
 | `WithCredentialKey(keyID string, key []byte)` | Encrypts provider credentials at rest with a 32-byte AES-256 key. `keyID` is stored beside every value it encrypts. See [Provider credentials](#provider-credentials). |
 | `WithPreviousCredentialKey(keyID string, key []byte)` | Adds an old key that only decrypts, for rotation. Needs a current key too. |
 
@@ -80,7 +81,7 @@ h, err := herald.New(
 
 ```go
 import (
-    "log/slog"
+    "log"
 
     "github.com/xraph/herald"
     "github.com/xraph/herald/driver/email"
@@ -98,7 +99,7 @@ if err != nil {
 
 ## Extension configuration
 
-**Import:** `github.com/xraph/herald/extension`
+Import: `github.com/xraph/herald/extension`
 
 When running as a Forge extension, Herald wraps the core config with additional fields for route registration, migration control, and Grove database integration.
 
@@ -106,6 +107,7 @@ When running as a Forge extension, Herald wraps the core config with additional 
 
 ```go
 type Config struct {
+    // The embedded fields carry no YAML tags, so a config file can't set them.
     herald.Config `json:",inline" yaml:",inline" mapstructure:",squash"`
 
     // BasePath is the URL prefix for all herald routes (default: "/herald").
@@ -120,9 +122,19 @@ type Config struct {
     // GroveDatabase is the name of a grove.DB registered in the DI container.
     GroveDatabase string `json:"grove_database" yaml:"grove_database" mapstructure:"grove_database"`
 
+    // Providers are created once at startup, if no provider with that
+    // name exists for the app yet.
+    Providers []ProviderConfig `json:"providers" yaml:"providers" mapstructure:"providers"`
+
+    CredentialsKey          string                `json:"credentials_key" yaml:"credentials_key" mapstructure:"credentials_key"`
+    CredentialsKeyID        string                `json:"credentials_key_id" yaml:"credentials_key_id" mapstructure:"credentials_key_id"`
+    PreviousCredentialsKeys []CredentialKeyConfig `json:"previous_credentials_keys" yaml:"previous_credentials_keys" mapstructure:"previous_credentials_keys"`
+
     // DashboardAppID is the app the dashboard manages when the session has
     // no app_id claim.
     DashboardAppID string `json:"dashboard_app_id" yaml:"dashboard_app_id" mapstructure:"dashboard_app_id"`
+
+    RequireConfig bool `json:"-" yaml:"-"`
 }
 ```
 
@@ -132,6 +144,7 @@ type Config struct {
 | `DisableRoutes` | `bool` | `false` | When `true`, the extension does not register routes automatically. |
 | `DisableMigrate` | `bool` | `false` | When `true`, the extension skips automatic schema migration. |
 | `GroveDatabase` | `string` | `""` | Name of the Grove database in the DI container. Empty uses the default unnamed DB. |
+| `Providers` | `[]ProviderConfig` | none | `providers`: each entry has `name`, `app_id`, `channel`, `driver`, `credentials`, `settings`, `priority` and `enabled` (default `true`). Seeded once, if absent, so later edits stick. |
 | `DashboardAppID` | `string` | `""` | `dashboard_app_id`: the app the dashboard manages when a session carries no `app_id` claim. A claim always wins. |
 | `CredentialsKey` | `string` | `""` | `credentials_key`: 32 bytes, standard base64. Encrypts provider credentials at rest. Supports `${ENV}` interpolation. |
 | `CredentialsKeyID` | `string` | `"k1"` | `credentials_key_id`: stored beside every value the key encrypts. Change it when you rotate. |
@@ -145,7 +158,7 @@ ext := extension.New(
     extension.WithBasePath("/notifications"),
     extension.WithDisableRoutes(),
     extension.WithDisableMigrate(),
-    extension.WithDriver(&sms.TwilioDriver{}),
+    extension.WithDriver(&slack.Driver{}), // github.com/xraph/herald/drivers/slack
 )
 ```
 
@@ -173,9 +186,6 @@ The extension loads configuration from Forge YAML config files. It checks two ke
 # config.yaml
 extensions:
   herald:
-    default_locale: "en"
-    max_batch_size: 100
-    truncate_body_at: 4096
     base_path: "/herald"
     disable_routes: false
     disable_migrate: false
@@ -187,11 +197,23 @@ extensions:
         key: "${HERALD_OLD_CREDENTIALS_KEY}"
 ```
 
-YAML configuration takes precedence over programmatic defaults. Programmatic boolean flags (`DisableRoutes`, `DisableMigrate`) override YAML when set to `true`.
+YAML values take precedence over programmatic ones for the string fields. Programmatic boolean flags (`DisableRoutes`, `DisableMigrate`) override YAML when set to `true`.
+
+`default_locale`, `max_batch_size` and `truncate_body_at` don't work in YAML. They belong to the embedded `herald.Config`, whose fields carry no YAML tags, so the binder skips them.
+
+In code, set `DefaultLocale` through `WithConfig`, not `WithHeraldOption(herald.WithDefaultLocale(...))`. The extension appends its own config values after your `WithHeraldOption` options, so a locale passed that way is overwritten with the config's (`en` by default):
+
+```go
+cfg := extension.DefaultConfig()
+cfg.DefaultLocale = "fr"
+ext := extension.New(extension.WithConfig(cfg))
+```
+
+`TruncateBodyAt` set on the extension never reaches the engine, which always uses 4096.
 
 ### Grove auto-detection
 
-When `GroveDatabase` is set (via YAML or `WithGroveDatabase`), the extension resolves a `*grove.DB` from the Forge DI container and auto-constructs the appropriate store backend based on the Grove driver type:
+When `GroveDatabase` is set (via YAML or `WithGroveDatabase`), the extension resolves that `*grove.DB` from the Forge DI container. Without it, the extension still looks for a default `*grove.DB` in the container. Either way it builds the store from the Grove driver type, and that store wins over one passed with `WithStore`:
 
 | Grove driver | Store backend |
 |--------------|---------------|
@@ -277,15 +299,13 @@ Put the new key in `credentials_key` with a new `credentials_key_id`, and move t
 After extension registration, the `*herald.Herald` instance is available from the Forge DI container:
 
 ```go
-import "github.com/xraph/vessel"
-
-h, err := vessel.Inject[*herald.Herald](app.Container())
+h, err := forge.Inject[*herald.Herald](app.Container())
 ```
 
 Or directly from the extension:
 
 ```go
-ext.Herald() // *herald.Herald (nil until Register is called)
-ext.API()    // *api.ForgeAPI
-ext.Config() // herald.Config
+ext.Herald()          // *herald.Herald (nil until Register is called)
+ext.API()             // *api.ForgeAPI
+ext.Herald().Config() // herald.Config
 ```

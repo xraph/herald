@@ -9,24 +9,24 @@ Herald is a **library** -- not a standalone service. You bring your own database
 
 ## What it does
 
-- **Multi-channel delivery** -- Send notifications across email, SMS, push, and in-app channels through a unified `Send` and `Notify` API. Each channel is backed by a pluggable driver that handles the transport-specific protocol.
-- **Template engine with i18n** -- Define notification templates with Go template syntax, locale-specific versions, and typed variables with required/optional validation. The renderer resolves the best locale match (exact, language-only, or default fallback) and renders subject, HTML body, text body, and title fields.
-- **In-app inbox** -- The `inapp` channel automatically stores notifications in a per-user inbox with read/unread tracking, unread counts, mark-all-read, and expiration support.
-- **User preferences** -- Users can opt out of specific notification types on specific channels. The engine checks preferences before sending and silently skips opted-out notifications.
-- **Scoped configuration** -- Override provider selection, sender identity, and locale at the app, organization, or user level. The scope resolver walks the chain `user -> org -> app -> default` to find the best match.
-- **Multiple store backends** -- Four backends implement the same composite `store.Store` interface: `memory` (testing), `postgres` (PostgreSQL via Grove), `sqlite` (SQLite via Grove), and `mongo` (MongoDB via Grove). All support Migrate, Ping, and Close lifecycle methods.
-- **Built-in drivers** -- Five drivers ship out of the box: `smtp` (standard SMTP with TLS), `resend` (Resend HTTP API), `twilio` (Twilio REST API), `fcm` (Firebase Cloud Messaging v1), and `inapp` (no-op driver for inbox storage).
-- **TypeID identifiers** -- All entities use type-prefixed, K-sortable, UUIDv7-based identifiers. Each entity type has its own prefix (`hpvd` for providers, `htpl` for templates, `hmsg` for messages, and so on), so passing the wrong ID type fails at parse time.
-- **Delivery log** -- Every send attempt is recorded as a `message.Message` with status tracking (`queued`, `sending`, `sent`, `failed`, `bounced`, `delivered`), provider attribution, and metadata.
-- **Forge extension** -- Herald ships with a `extension.Extension` that integrates with the Forge framework for automatic route registration, migration, health checks, DI container binding, and YAML-based configuration.
+- Multi-channel delivery: send notifications across email, SMS, push, and in-app channels through a unified `Send` and `Notify` API. Each channel is backed by a pluggable driver that handles the transport-specific protocol.
+- Template engine with i18n: define notification templates with Go template syntax, locale-specific versions, and typed variables with required/optional validation. The renderer resolves the best locale match (exact, language-only, or default fallback) and renders subject, HTML body, text body, and title fields.
+- In-app inbox: the `inapp` channel automatically stores notifications in a per-user inbox with read/unread tracking, unread counts, mark-all-read, and expiration support.
+- User preferences: users can opt out of specific notification types on specific channels. The engine checks preferences before sending, and an opted-out send is logged as `suppressed` without reaching a driver.
+- Scoped configuration: override provider selection and sender identity at the app, organization, or user level. The scope resolver walks the chain `user -> org -> app -> default` to find the best match.
+- Multiple store backends: four backends implement the same composite `store.Store` interface: `memory` (testing), `postgres` (PostgreSQL via Grove), `sqlite` (SQLite via Grove), and `mongo` (MongoDB via Grove). All support Migrate, Ping, and Close lifecycle methods.
+- Built-in drivers: five drivers ship out of the box: `smtp` (standard SMTP with TLS), `resend` (Resend HTTP API), `twilio` (Twilio REST API), `fcm` (Firebase Cloud Messaging v1), and `inapp` (no-op driver for inbox storage).
+- TypeID identifiers: all entities use type-prefixed, K-sortable, UUIDv7-based identifiers. Each entity type has its own prefix (`hpvd` for providers, `htpl` for templates, `hmsg` for messages, and so on), so passing the wrong ID type fails at parse time.
+- Delivery log: every send attempt is recorded as a `message.Message` with status tracking (`sending`, `sent`, `failed`, `suppressed`), provider attribution, and metadata.
+- Forge extension: herald ships with a `extension.Extension` that integrates with the Forge framework for automatic route registration, migration, health checks, DI container binding, and YAML-based configuration.
 
 ## Design philosophy
 
-**Library, not service.** Herald is a set of Go packages you import. You control `main`, the database connection, the provider credentials, and the process lifecycle.
+Herald is a library, not a service. It is a set of Go packages you import. You control `main`, the database connection, the provider credentials, and the process lifecycle.
 
-**Interfaces over implementations.** Every subsystem defines a Go interface (`provider.Store`, `template.Store`, `message.Store`, `inbox.Store`, `preference.Store`, `scope.Store`). Swap any storage backend with a single type change.
+Every subsystem defines a Go interface (`provider.Store`, `template.Store`, `message.Store`, `inbox.Store`, `preference.Store`, `scope.Store`). Swap any storage backend with a single type change.
 
-**Composable stores.** The `store.Store` interface composes all six subsystem store interfaces plus Migrate, Ping, and Close. Pass a single backend value wherever a store is needed.
+The `store.Store` interface composes all six subsystem store interfaces plus Migrate, Ping, and Close. Pass a single backend value wherever a store is needed.
 
 **Scope-aware delivery.** The `scope.Resolver` walks the configuration hierarchy (`user -> org -> app -> default`) to resolve the correct provider and sender identity for each notification. This enables per-organization branding and per-user provider overrides without any application-level logic.
 

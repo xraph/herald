@@ -122,12 +122,13 @@ Messages progress through a lifecycle of states:
 
 | Status | Description |
 |--------|-------------|
-| `queued` | Message created, pending delivery (async mode) |
+| `queued` | Declared, but nothing sets it today (there is no async mode) |
 | `sending` | Delivery attempt in progress |
 | `sent` | Driver accepted the message |
-| `delivered` | Delivery confirmed by the provider |
+| `delivered` | Declared for provider confirmations; nothing records it on a message today |
 | `failed` | Delivery failed |
-| `bounced` | Recipient address bounced |
+| `bounced` | Declared, but nothing sets it today |
+| `suppressed` | The user opted out, so nothing was sent |
 
 The outcome is written once with `RecordDelivery` when the send finishes:
 

@@ -181,7 +181,7 @@ type Store interface {
 **Package:** `github.com/xraph/herald/message`
 **ID prefix:** `hmsg_`
 
-A `Message` represents a delivery log entry for a sent or queued notification. Every call to `Herald.Send` creates a message record that tracks the full lifecycle of the delivery attempt.
+A `Message` represents a delivery log entry for one recipient of a send. Every call to `Herald.Send` creates a message record that tracks the full lifecycle of the delivery attempt.
 
 ```go
 type Message struct {
@@ -214,7 +214,7 @@ type Message struct {
 | `Body` | Truncated to `Config.TruncateBodyAt` characters (default 4096). |
 | `Status` | Current delivery status (see lifecycle below). |
 | `Error` | Error message if delivery failed. |
-| `Async` | Whether the send was dispatched asynchronously. |
+| `Async` | Copied from the request. Herald doesn't act on it: every send is synchronous. |
 | `Attempts` | Number of delivery attempts. |
 
 ### Status lifecycle
@@ -222,10 +222,12 @@ type Message struct {
 Messages progress through a defined status lifecycle:
 
 ```
-queued --> sending --> sent --> delivered
-                  \-> failed
-                  \-> bounced
+sending --> sent
+        \-> failed
+suppressed (opted out, nothing sent)
 ```
+
+`queued`, `bounced` and `delivered` are declared for future use. `Send` never writes them.
 
 ```go
 const (
@@ -235,17 +237,20 @@ const (
     StatusFailed    Status = "failed"
     StatusBounced   Status = "bounced"
     StatusDelivered Status = "delivered"
+
+    StatusSuppressed Status = "suppressed"
 )
 ```
 
 | Status | Description |
 |--------|-------------|
-| `queued` | Message created but not yet dispatched to the driver. |
+| `queued` | Declared, but nothing sets it today. |
 | `sending` | Driver send in progress. |
 | `sent` | Driver confirmed acceptance (does not guarantee inbox delivery). |
 | `failed` | Driver returned an error. The `Error` field contains details. |
-| `bounced` | Delivery bounced (hard bounce from the receiving server). |
-| `delivered` | Confirmed delivery to the recipient (when provider supports delivery tracking). |
+| `bounced` | Declared, but nothing sets it today. |
+| `delivered` | Declared for delivery tracking; nothing records it on a message today. |
+| `suppressed` | The user opted out of this template on this channel, so no driver was called. |
 
 ### ListOptions
 

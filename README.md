@@ -219,7 +219,7 @@ app := forge.NewApp(forge.AppConfig{
 
 During `Register` the extension:
 
-1. Picks a store: `WithStore`, a named `*grove.DB` from `WithGroveDatabase(name)` or `grove_database`, or the default `*grove.DB` in the container.
+1. Picks a store. A `*grove.DB` from `WithGroveDatabase(name)` or `grove_database` comes first, then the default `*grove.DB` in the container, then `WithStore`. A grove store wins over `WithStore` even when you never asked for grove, so in an app that also runs the Grove extension your `WithStore` store is ignored unless there's no default grove database.
 2. Uses a `chronicle.Emitter` from the container for audit events if there is one, and slog if not.
 3. Registers the five built-in drivers. Add others with `heraldext.WithDriver`.
 4. Runs migrations, seeds the in-app provider and any `providers` from your config, and mounts the REST API under `/herald`.
@@ -259,7 +259,21 @@ extensions:
 
 Providers listed under `providers` are created once, if no provider with that name exists for the app yet, so edits you make later through the API or dashboard stick. With `credentials_key` set, new credentials are stored encrypted, and `previous_credentials_keys` lets Herald read rows written under an older key. In code, the same key goes in with `herald.WithCredentialKey` and `herald.WithPreviousCredentialKey`.
 
-The extension options are `WithStore`, `WithGroveDatabase`, `WithDriver`, `WithBasePath`, `WithDisableRoutes`, `WithDisableMigrate`, `WithAPIMiddleware`, `WithConfig`, `WithRequireConfig` and `WithHeraldOption` for any engine option. The engine settings that come from the embedded `herald.Config` (`DefaultLocale`, `MaxBatchSize`) carry no YAML tags today and don't bind from a config file, so set them in code with `WithHeraldOption(herald.WithDefaultLocale("fr"))`.
+The extension options are `WithStore`, `WithGroveDatabase`, `WithDriver`, `WithBasePath`, `WithDisableRoutes`, `WithDisableMigrate`, `WithAPIMiddleware`, `WithConfig`, `WithRequireConfig` and `WithHeraldOption` for a raw engine option.
+
+The engine settings that come from the embedded `herald.Config` (`DefaultLocale`, `MaxBatchSize`, `TruncateBodyAt`) carry no YAML tags today, so they don't bind from a config file. `WithHeraldOption(herald.WithDefaultLocale("fr"))` doesn't work for them either: the extension fills `DefaultLocale` and `MaxBatchSize` from its own defaults and appends those options after yours, so the locale ends up `en`. Set them through `WithConfig`, starting from the defaults:
+
+```go
+cfg := heraldext.DefaultConfig()
+cfg.DefaultLocale = "fr"
+
+heraldext.New(
+	heraldext.WithConfig(cfg),
+	heraldext.WithStore(memory.New()),
+)
+```
+
+`WithConfig` replaces the whole config, so put it before the options that write into it. `TruncateBodyAt` never reaches the engine, which always truncates logged bodies at 4096 characters, and nothing reads `MaxBatchSize` yet. Keep `WithHeraldOption` for options the config doesn't cover, such as `herald.WithLogger`.
 
 ## Documentation
 

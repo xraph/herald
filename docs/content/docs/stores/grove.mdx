@@ -3,20 +3,20 @@ title: Grove ORM Integration
 description: How Herald uses Grove as its ORM layer across all database backends.
 ---
 
-Herald uses [Grove ORM](https://github.com/xraph/grove) as its unified database abstraction layer. All three relational and document store backends (PostgreSQL, SQLite, MongoDB) share the same `store.Store` interface, with Grove handling the driver-specific differences under the hood.
+Herald uses [Grove ORM](https://github.com/xraph/grove) as its database layer. The PostgreSQL, SQLite and MongoDB stores all sit on a `*grove.DB` and share the same `store.Store` interface. There is no separate "grove store" package: this page covers what those three have in common.
 
 ## Architecture
 
 Grove provides Herald with:
 
-- **Driver auto-detection** -- The Forge extension detects the Grove driver name (`pg`, `sqlite`, `mongo`) from the connection and constructs the correct store backend automatically.
-- **Migration orchestration** -- Each backend registers versioned migrations via `migrate.NewGroup("herald")`, and Grove's `Orchestrator` handles version tracking, ordering, and execution.
-- **BaseModel embedding** -- All model structs embed `grove.BaseModel` with a `grove:"table:xxx"` tag to declare the backing table or collection.
-- **Struct tag mapping** -- Fields use `grove:"field_name"` tags for column mapping. JSONB columns use `grove:"field,type:jsonb"`. Primary keys use `grove:"id,pk"`.
+- Driver auto-detection: the Forge extension detects the Grove driver name (`pg`, `sqlite`, `mongo`) from the connection and constructs the correct store backend automatically.
+- Migration orchestration: each backend registers versioned migrations via `migrate.NewGroup("herald")`, and Grove's `Orchestrator` handles version tracking, ordering, and execution.
+- BaseModel embedding: all model structs embed `grove.BaseModel` with a `grove:"table:xxx"` tag to declare the backing table or collection.
+- Struct tag mapping: fields use `grove:"field_name"` tags for column mapping. JSONB columns use `grove:"field,type:jsonb"`. Primary keys use `grove:"id,pk"`.
 
 ## Driver Auto-Detection
 
-When Herald runs as a Forge extension with `WithGroveDatabase`, the extension resolves a `*grove.DB` from the DI container and inspects the driver name:
+When Herald runs as a Forge extension with `WithGroveDatabase` (or finds a default `*grove.DB` in the container without it), the extension resolves the `*grove.DB` and inspects the driver name:
 
 ```go
 func (e *Extension) buildStoreFromGroveDB(db *grove.DB) (store.Store, error) {
@@ -34,11 +34,11 @@ func (e *Extension) buildStoreFromGroveDB(db *grove.DB) (store.Store, error) {
 }
 ```
 
-You do not need to import individual store packages when using the extension -- the correct backend is selected at runtime.
+You do not need to import individual store packages when using the extension: the correct backend is selected at runtime.
 
 ## Migration System
 
-Herald registers all 7 migrations in a single migration group named `"herald"`. Each backend package exports a `Migrations` variable:
+Herald registers its migrations in a single migration group named `"herald"`. Each backend package exports a `Migrations` variable:
 
 ```go
 var Migrations = migrate.NewGroup("herald")
@@ -55,6 +55,8 @@ Migrations are registered in `init()` using `Migrations.MustRegister(...)`. Each
 | `20240201000005` | `create_herald_inbox` | In-app notifications |
 | `20240201000006` | `create_herald_preferences` | User notification preferences |
 | `20240201000007` | `create_herald_scoped_configs` | Scoped provider overrides |
+| `20240201000008` | `add_webhook_chat_provider_ids` | Webhook and chat provider columns on scoped configs |
+| `20260930000001` | `add_message_provider_message_id` | The vendor's message ID on the delivery log |
 
 For SQL backends (PostgreSQL, SQLite), the `Up` function executes DDL via `exec.Exec(ctx, sql)`. For MongoDB, the `Up` function uses `mongomigrate.Executor` to create collections and indexes.
 
@@ -106,9 +108,9 @@ type providerModel struct {
 
 Each backend follows a consistent model/mapper pattern:
 
-1. **Model struct** -- database-level struct with `grove` tags (and `bson` tags for MongoDB).
-2. **`toXxxModel(entity) *xxxModel`** -- converts a domain entity to a database model.
-3. **`fromXxxModel(model) (*Entity, error)`** -- converts a database model back to a domain entity, parsing TypeIDs.
+1. **Model struct**: database-level struct with `grove` tags (and `bson` tags for MongoDB).
+2. **`toXxxModel(entity) *xxxModel`**: converts a domain entity to a database model.
+3. **`fromXxxModel(model) (*Entity, error)`**: converts a database model back to a domain entity, parsing TypeIDs.
 
 This pattern isolates the domain types from database concerns while keeping the mapping code explicit and testable.
 
@@ -131,7 +133,7 @@ type Store interface {
 }
 ```
 
-This means you can swap backends without changing any application code -- only the store construction changes.
+This means you can swap backends without changing any application code: only the store construction changes.
 
 ## Choosing a Backend
 

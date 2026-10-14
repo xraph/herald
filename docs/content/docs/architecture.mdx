@@ -64,7 +64,7 @@ SendRequest
            ▼
 ┌──────────────────────┐
 │ 3. Resolve provider  │  Walk scope chain: user → org → app → fallback
-│    (scope resolver)  │  Select highest-priority enabled provider
+│    (scope resolver)  │  Else the enabled provider, lowest Priority
 │                      │  Extract credentials and sender identity
 └──────────┬───────────┘
            │

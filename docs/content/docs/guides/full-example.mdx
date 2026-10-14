@@ -205,7 +205,7 @@ func main() {
     }
     fmt.Println("[Preferences] Bob opted out of welcome emails")
 
-    // Sending to Bob will be skipped for the welcome email.
+    // Bob's send is suppressed: no driver is called.
     bobResult, err := h.Send(ctx, &herald.SendRequest{
         AppID:    "myapp",
         UserID:   "user-bob",
@@ -267,7 +267,9 @@ func main() {
 func boolPtr(b bool) *bool { return &b }
 ```
 
-## Expected Output
+## Expected output
+
+`smtp.example.com` isn't a mail server you can reach, so the sends through SMTP fail and you'll see this (IDs shortened):
 
 ```
 [Provider] Created: SMTP Production (hpvd_...)
@@ -275,19 +277,22 @@ func boolPtr(b bool) *bool { return &b }
 [Config] App-level config set
 [Template] Created: Welcome Email (htpl_...)
 [Template] Added 2 versions: en, fr
-[Send] Result: status=sent message_id=hmsg_...
+[Send] Result: status=failed message_id=hmsg_...
 [Messages] Total: 1
-  - hmsg_... to=alice@example.com status=sent channel=email
+  - hmsg_... to=alice@example.com status=failed channel=email
 [Preferences] Bob opted out of welcome emails
-[Send] Bob result: status=sent error="user opted out"
+[Send] Bob result: status=suppressed error="user opted out"
 [Inbox] Alice unread count: 1
 [Inbox] After mark read: 0
+WARN herald: notify channel failed channel=inapp template=welcome error="herald: template not found: welcome on inapp"
 [Notify] Sent across 2 channels
-  - status=sent provider=...
-  - status=sent provider=...
+  - status=failed provider=hpvd_...
+  - status=failed provider=
 
 All features demonstrated successfully.
 ```
+
+A few things to notice. A failed delivery comes back in the result with `status=failed`, not as an error from `Send`, and the message log keeps it. Bob's send never reaches a driver: his opt-out turns it into a `suppressed` row. The `inapp` half of `Notify` fails because the `welcome` template only exists on the `email` channel; templates belong to one channel, so you'd create a second `welcome` template with `Channel: "inapp"`. Point the SMTP provider at a real server (Mailpit on `localhost:1025` works) and the email sends come back `sent`.
 
 ## Forge Extension Example
 
@@ -303,10 +308,8 @@ import (
     "time"
 
     "github.com/xraph/forge"
-    "github.com/xraph/grove"
+    _ "github.com/xraph/grove/drivers/pgdriver" // registers the "pg" driver
     groveext "github.com/xraph/grove/extension"
-    "github.com/xraph/grove/drivers/pgdriver"
-    "github.com/xraph/vessel"
 
     "github.com/xraph/herald"
     heraldext "github.com/xraph/herald/extension"
@@ -317,31 +320,37 @@ import (
 )
 
 func main() {
-    app := forge.New()
+    app := forge.NewApp(forge.AppConfig{
+        Name: "myapp",
+        Extensions: []forge.Extension{
+            // Grove first, so its database is in the container
+            // when Herald registers.
+            groveext.New(
+                groveext.WithDSN("pg", "postgres://localhost:5432/myapp?sslmode=disable"),
+            ),
+            heraldext.New(
+                heraldext.WithGroveDatabase(""),
+                heraldext.WithAPIMiddleware(requireAdmin), // your auth middleware
+            ),
+        },
+    })
 
-    // Register Grove with PostgreSQL.
-    app.Register(groveext.New(
-        groveext.WithDriver(pgdriver.New(
-            pgdriver.WithDSN("postgres://localhost:5432/myapp?sslmode=disable"),
-        )),
-    ))
-
-    // Register Herald extension.
-    app.Register(heraldext.New(
-        heraldext.WithGroveDatabase(""),
-    ))
-
-    // After registration, resolve Herald from the DI container.
-    app.OnStart(func(ctx context.Context) error {
-        h, err := vessel.Inject[*herald.Herald](app.Container())
+    // Once the app has started, resolve Herald from the DI container.
+    err := app.RegisterHookFn(forge.PhaseAfterStart, "seed-herald", func(ctx context.Context, app forge.App) error {
+        h, err := forge.Inject[*herald.Herald](app.Container())
         if err != nil {
             return fmt.Errorf("resolve herald: %w", err)
         }
 
         return seedData(ctx, h)
     })
+    if err != nil {
+        log.Fatal(err)
+    }
 
-    app.Run()
+    if err := app.Run(); err != nil {
+        log.Fatal(err)
+    }
 }
 
 func seedData(ctx context.Context, h *herald.Herald) error {
@@ -426,7 +435,7 @@ Once the Forge extension is running, you can send notifications via the HTTP API
 
 ```bash
 # Send a single notification
-curl -X POST http://localhost:8080/herald/send \
+curl -X POST http://localhost:8080/herald/v1/send \
   -H "Content-Type: application/json" \
   -d '{
     "app_id": "myapp",
@@ -440,7 +449,7 @@ curl -X POST http://localhost:8080/herald/send \
   }'
 
 # Multi-channel notify
-curl -X POST http://localhost:8080/herald/notify \
+curl -X POST http://localhost:8080/herald/v1/notify \
   -H "Content-Type: application/json" \
   -d '{
     "app_id": "myapp",

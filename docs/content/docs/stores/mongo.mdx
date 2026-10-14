@@ -24,10 +24,14 @@ import (
 )
 
 // Open a MongoDB connection via Grove.
-db := grove.Open(mongodriver.New(
-    mongodriver.WithURI("mongodb://localhost:27017"),
-    mongodriver.WithDatabase("herald"),
-))
+drv := mongodriver.New()
+if err := drv.Open(ctx, "mongodb://localhost:27017", mongodriver.WithDatabase("herald")); err != nil {
+    log.Fatal(err)
+}
+db, err := grove.Open(drv)
+if err != nil {
+    log.Fatal(err)
+}
 
 // Create the Herald store.
 store := mongo.New(db)
@@ -194,10 +198,14 @@ func main() {
         uri = "mongodb://localhost:27017"
     }
 
-    db := grove.Open(mongodriver.New(
-        mongodriver.WithURI(uri),
-        mongodriver.WithDatabase("herald"),
-    ))
+    drv := mongodriver.New()
+    if err := drv.Open(ctx, uri, mongodriver.WithDatabase("herald")); err != nil {
+        log.Fatal(err)
+    }
+    db, err := grove.Open(drv)
+    if err != nil {
+        log.Fatal(err)
+    }
 
     store := mongostore.New(db)
     if err := store.Migrate(ctx); err != nil {

@@ -225,7 +225,7 @@ Resolution for this request:
 1. Check if `user-42` has a scoped config with an email provider override.
 2. If not, check if `org-acme` has a scoped config with an email provider override.
 3. If not, check if `myapp` has an app-level scoped config.
-4. If not, fall back to the highest-priority enabled email provider for `myapp`.
+4. If not, fall back to the enabled email provider for `myapp` with the lowest `Priority` number.
 
 ## Multi-channel delivery
 

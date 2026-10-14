@@ -23,9 +23,14 @@ import (
 )
 
 // Open a SQLite connection via Grove.
-db := grove.Open(sqlitedriver.New(
-    sqlitedriver.WithDSN("file:herald.db?_journal=WAL"),
-))
+drv := sqlitedriver.New()
+if err := drv.Open(ctx, "file:herald.db?_journal=WAL"); err != nil {
+    log.Fatal(err)
+}
+db, err := grove.Open(drv)
+if err != nil {
+    log.Fatal(err)
+}
 
 // Create the Herald store.
 store := sqlite.New(db)
@@ -148,9 +153,14 @@ import (
 func main() {
     ctx := context.Background()
 
-    db := grove.Open(sqlitedriver.New(
-        sqlitedriver.WithDSN("file:herald.db?_journal=WAL&_busy_timeout=5000"),
-    ))
+    drv := sqlitedriver.New()
+    if err := drv.Open(ctx, "file:herald.db?_journal=WAL&_busy_timeout=5000"); err != nil {
+        log.Fatal(err)
+    }
+    db, err := grove.Open(drv)
+    if err != nil {
+        log.Fatal(err)
+    }
 
     store := sqlite.New(db)
     if err := store.Migrate(ctx); err != nil {

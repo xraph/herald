@@ -59,7 +59,8 @@ func WithStore(s store.Store) Option
 func WithDriver(d driver.Driver) Option
 func WithLogger(logger *slog.Logger) Option
 func WithDefaultLocale(locale string) Option
-func WithMaxBatchSize(n int) Option
+func WithMaxBatchSize(n int) Option // stored, not read yet
+func WithChronicle(c bridge.Chronicle) Option
 func WithCredentialKey(keyID string, key []byte) Option
 func WithPreviousCredentialKey(keyID string, key []byte) Option
 ```
@@ -69,8 +70,8 @@ func WithPreviousCredentialKey(keyID string, key []byte) Option
 ```go
 type Config struct {
     DefaultLocale  string // default: "en"
-    MaxBatchSize   int    // default: 100
-    TruncateBodyAt int    // default: 1000
+    MaxBatchSize   int    // default: 100; nothing reads it yet
+    TruncateBodyAt int    // default: 4096
 }
 
 func DefaultConfig() Config
@@ -91,8 +92,9 @@ type SendRequest struct {
     Data     map[string]any    `json:"data,omitempty"`
     Subject  string            `json:"subject,omitempty"`
     Body     string            `json:"body,omitempty"`
-    Async    bool              `json:"async,omitempty"`
+    Async    bool              `json:"async,omitempty"` // stored on the message, not acted on
     Metadata map[string]string `json:"metadata,omitempty"`
+    ProviderID string          `json:"provider_id,omitempty"` // skip the resolver
 }
 
 type NotifyRequest struct {
@@ -110,15 +112,12 @@ type NotifyRequest struct {
 }
 
 type SendResult struct {
-    MessageID  id.MessageID   `json:"message_id"`
-    Status     message.Status `json:"status"`
-    // ProviderID is always Herald's provider ID.
-    ProviderID string `json:"provider_id,omitempty"`
-    // ProviderMessageID is the vendor's ID for the message, when it gave one.
-    ProviderMessageID string `json:"provider_message_id,omitempty"`
-    Error             string `json:"error,omitempty"`
-    // Logged is false when the message log couldn't be written.
-    Logged bool `json:"logged"`
+    MessageID         id.MessageID   `json:"message_id"`
+    Status            message.Status `json:"status"`
+    ProviderID        string         `json:"provider_id,omitempty"`
+    ProviderMessageID string         `json:"provider_message_id,omitempty"`
+    Error             string         `json:"error,omitempty"`
+    Logged            bool           `json:"logged"`
 }
 ```
 

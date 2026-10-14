@@ -23,9 +23,14 @@ import (
 )
 
 // Open a PostgreSQL connection via Grove.
-db := grove.Open(pgdriver.New(
-    pgdriver.WithDSN("postgres://user:pass@localhost:5432/herald?sslmode=disable"),
-))
+drv := pgdriver.New()
+if err := drv.Open(ctx, "postgres://user:pass@localhost:5432/herald?sslmode=disable"); err != nil {
+    log.Fatal(err)
+}
+db, err := grove.Open(drv)
+if err != nil {
+    log.Fatal(err)
+}
 
 // Create the Herald store.
 store := postgres.New(db)
@@ -247,9 +252,14 @@ func main() {
         dsn = "postgres://localhost:5432/herald?sslmode=disable"
     }
 
-    db := grove.Open(pgdriver.New(
-        pgdriver.WithDSN(dsn),
-    ))
+    drv := pgdriver.New()
+    if err := drv.Open(ctx, dsn); err != nil {
+        log.Fatal(err)
+    }
+    db, err := grove.Open(drv)
+    if err != nil {
+        log.Fatal(err)
+    }
 
     store := postgres.New(db)
     if err := store.Migrate(ctx); err != nil {
