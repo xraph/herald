@@ -7,12 +7,20 @@ import (
 	"fmt"
 	"net"
 	"net/smtp"
+	"strconv"
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/xraph/herald/driver"
+	"github.com/xraph/herald/internal/telemetry"
 	"github.com/xraph/herald/message"
 )
+
+// spanSMTP names the client span around one SMTP conversation.
+const spanSMTP = "send smtp"
 
 // SMTPDriver delivers email via standard SMTP.
 type SMTPDriver struct{}
@@ -71,14 +79,26 @@ func (d *SMTPDriver) Send(ctx context.Context, msg *driver.OutboundMessage) (*dr
 		auth = smtp.PlainAuth("", username, password, host)
 	}
 
+	// The span carries the server's address and port and nothing else: no
+	// sender, recipient, subject or error text. A failure reports the
+	// server's reply code ("550") or a network class.
+	attrs := []attribute.KeyValue{telemetry.KeyServerAddress.String(host)}
+	if p, err := strconv.Atoi(port); err == nil {
+		attrs = append(attrs, telemetry.KeyServerPort.Int(p))
+	}
+	ctx, span := telemetry.Tracer().Start(ctx, spanSMTP,
+		trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(attrs...))
+	defer span.End()
+
+	var err error
 	if useTLS {
-		if err := sendWithTLS(ctx, addr, host, from, []string{msg.To}, body.String(), auth); err != nil {
-			return nil, err
-		}
+		err = sendWithTLS(ctx, addr, host, from, []string{msg.To}, body.String(), auth)
 	} else {
-		if err := sendPlain(ctx, addr, host, from, []string{msg.To}, body.String(), auth); err != nil {
-			return nil, err
-		}
+		err = sendPlain(ctx, addr, host, from, []string{msg.To}, body.String(), auth)
+	}
+	if err != nil {
+		telemetry.FailErr(span, telemetry.SMTPClass(ctx, err), err)
+		return nil, err
 	}
 
 	return &driver.DeliveryResult{Status: message.StatusSent}, nil

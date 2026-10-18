@@ -65,7 +65,7 @@ func (d *ResendDriver) Send(ctx context.Context, msg *driver.OutboundMessage) (*
 		return nil, fmt.Errorf("resend: marshal request: %w", err)
 	}
 
-	httpClient := &http.Client{Timeout: 10 * time.Second}
+	httpClient := driver.HTTPClient(10*time.Second, driver.Endpoint{Driver: "resend", URLTemplate: "/emails"})
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/emails", bytes.NewReader(jsonBody))
 	if err != nil {
