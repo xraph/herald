@@ -4,6 +4,8 @@ import (
 	"errors"
 	"log/slog"
 
+	gometrics "github.com/xraph/go-utils/metrics"
+
 	"github.com/xraph/herald/bridge"
 	"github.com/xraph/herald/credential"
 	"github.com/xraph/herald/driver"
@@ -21,6 +23,7 @@ type Herald struct {
 	resolver  *scope.Resolver
 	chronicle bridge.Chronicle
 	logger    *slog.Logger
+	metrics   *sendMetrics
 
 	// credential encryption, built in New from the options below
 	cipher       *credential.Cipher
@@ -83,6 +86,18 @@ func WithStore(s store.Store) Option {
 func WithLogger(logger *slog.Logger) Option {
 	return func(h *Herald) error {
 		h.logger = logger
+		return nil
+	}
+}
+
+// WithMetrics records herald's metrics on m: deliveries by channel, driver
+// and result, delivery latency, suppressed recipients, rejected sends and
+// failed message log writes. In a Forge app pass app.Metrics() (the
+// extension does this for you) and the series scrape as forge_herald_*. A
+// nil m records nothing, which is also the default.
+func WithMetrics(m gometrics.Metrics) Option {
+	return func(h *Herald) error {
+		h.metrics = newSendMetrics(m)
 		return nil
 	}
 }

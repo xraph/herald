@@ -62,7 +62,7 @@ func (d *Driver) Send(ctx context.Context, msg *driver.OutboundMessage) (*driver
 	}
 
 	apiURL := fmt.Sprintf("%s/v3/%s/messages", baseURL, domain)
-	httpClient := &http.Client{Timeout: 10 * time.Second}
+	httpClient := driver.HTTPClient(10*time.Second, driver.Endpoint{Driver: "mailgun", URLTemplate: "/v3/{domain}/messages"})
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, strings.NewReader(data.Encode()))
 	if err != nil {

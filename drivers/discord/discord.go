@@ -66,7 +66,7 @@ func (d *Driver) Send(ctx context.Context, msg *driver.OutboundMessage) (*driver
 	}
 
 	// Discord requires ?wait=true to get back the message object.
-	httpClient := &http.Client{Timeout: 10 * time.Second}
+	httpClient := driver.HTTPClient(10*time.Second, driver.Endpoint{Driver: "discord", HideHost: true})
 
 	endpoint, err := withWait(webhookURL)
 	if err != nil {

@@ -74,6 +74,7 @@ h, err := herald.New(
 | `WithDefaultLocale(locale string)` | Overrides the default locale for template rendering. |
 | `WithMaxBatchSize(n int)` | Sets `MaxBatchSize`, which nothing reads yet. |
 | `WithChronicle(c bridge.Chronicle)` | Sends audit events to this Chronicle bridge. |
+| `WithMetrics(m metrics.Metrics)` | Records the `herald_*` delivery metrics on a go-utils metrics sink. Nil, the default, records nothing. The Forge extension passes the app's metrics. See [Observability](/docs/subsystems/observability#metrics). |
 | `WithCredentialKey(keyID string, key []byte)` | Encrypts provider credentials at rest with a 32-byte AES-256 key. `keyID` is stored beside every value it encrypts. See [Provider credentials](#provider-credentials). |
 | `WithPreviousCredentialKey(keyID string, key []byte)` | Adds an old key that only decrypts, for rotation. Needs a current key too. |
 

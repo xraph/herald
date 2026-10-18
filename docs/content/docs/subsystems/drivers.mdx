@@ -315,6 +315,18 @@ func (d *SESDriver) Send(ctx context.Context, msg *driver.OutboundMessage) (*dri
 }
 ```
 
+If your driver calls an HTTP API, build its client with `driver.HTTPClient` instead of `&http.Client{}`. It behaves the same (default transport, your timeout, the transport's own errors) and records the call as a client span under the send, the way the built-in drivers do:
+
+```go
+client := driver.HTTPClient(10*time.Second, driver.Endpoint{
+    Driver:      "ses",
+    URLTemplate: "/v2/email/outbound-emails",
+})
+resp, err := client.Do(req)
+```
+
+`URLTemplate` names the span and is the only part of the path it records, so write any account ID, domain or device token in it as a placeholder (`/v3/{domain}/messages`). If the user supplies the whole URL, as with a webhook, leave `URLTemplate` empty and set `HideHost: true`, and the span carries no host either. The client sends no trace headers or baggage to the vendor. [Observability](/docs/subsystems/observability#vendor-calls) lists what the span holds.
+
 Register the custom driver when creating your Herald instance:
 
 ```go

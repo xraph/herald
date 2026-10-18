@@ -70,7 +70,7 @@ func (d *FCMDriver) Send(ctx context.Context, msg *driver.OutboundMessage) (*dri
 	}
 	apiURL := fmt.Sprintf("%s/v1/projects/%s/messages:send", baseURL, projectID)
 
-	httpClient := &http.Client{Timeout: 10 * time.Second}
+	httpClient := driver.HTTPClient(10*time.Second, driver.Endpoint{Driver: "fcm", URLTemplate: "/v1/projects/{project_id}/messages:send"})
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(jsonBody))
 	if err != nil {

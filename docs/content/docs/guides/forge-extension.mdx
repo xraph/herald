@@ -41,7 +41,7 @@ During `Register` the extension:
 
 1. Loads configuration from YAML (or programmatic defaults).
 2. Picks a store (see [store resolution](#store-resolution)).
-3. Uses a `chronicle.Emitter` from the container for audit events if there is one, and slog if not.
+3. Uses a `chronicle.Emitter` from the container for audit events if there is one, and slog if not. Hands the app's metrics to Herald, so the `forge_herald_*` series appear on `/_/metrics` (see [Observability](/docs/subsystems/observability)).
 4. Registers the built-in drivers (SMTP, Resend, Twilio, FCM, in-app) plus any you added with `WithDriver`.
 5. Runs migrations, unless disabled.
 6. Seeds the in-app provider and any `providers` from your config.

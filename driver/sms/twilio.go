@@ -57,7 +57,7 @@ func (d *TwilioDriver) Send(ctx context.Context, msg *driver.OutboundMessage) (*
 	data.Set("From", fromNumber)
 	data.Set("Body", msg.Text)
 
-	httpClient := &http.Client{Timeout: 10 * time.Second}
+	httpClient := driver.HTTPClient(10*time.Second, driver.Endpoint{Driver: "twilio", URLTemplate: "/2010-04-01/Accounts/{account_sid}/Messages.json"})
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, strings.NewReader(data.Encode()))
 	if err != nil {

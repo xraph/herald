@@ -14,10 +14,14 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/xraph/herald/bridge"
 	"github.com/xraph/herald/driver"
 	"github.com/xraph/herald/id"
 	"github.com/xraph/herald/inbox"
+	"github.com/xraph/herald/internal/telemetry"
 	"github.com/xraph/herald/message"
 	"github.com/xraph/herald/provider"
 	"github.com/xraph/herald/scope"
@@ -73,11 +77,38 @@ type SendResult struct {
 }
 
 // Send delivers a notification on a single channel.
+//
+// It records a "send notification" span. The span names the channel,
+// template, driver and provider and counts recipients, sent and failed
+// deliveries; it never carries a recipient, the data, the content or the
+// metadata. Each driver's own vendor call is a client span under it.
 func (h *Herald) Send(ctx context.Context, req *SendRequest) (*SendResult, error) {
+	channel := channelLabel(req.Channel)
+	ctx, span := telemetry.Tracer().Start(ctx, spanSend, trace.WithAttributes(
+		telemetry.KeyChannel.String(channel),
+		telemetry.KeyRecipientCount.Int(len(req.To)),
+	))
+	defer span.End()
+	if req.Template != "" {
+		span.SetAttributes(telemetry.KeyTemplate.String(req.Template))
+	}
+
+	res, err := h.send(ctx, req, channel, span)
+	if err != nil {
+		reason, errType := classify(err)
+		h.metrics.reject(channel, reason)
+		telemetry.Fail(span, reason, errType)
+	}
+	return res, err
+}
+
+// send is Send under its span. channel is req.Channel clamped for telemetry.
+func (h *Herald) send(ctx context.Context, req *SendRequest, channel string, span trace.Span) (*SendResult, error) {
 	if req.UserID != "" && req.Template != "" {
 		pref, _ := h.store.GetPreference(ctx, req.AppID, req.UserID) //nolint:errcheck // no preference means opted in
 		if pref != nil && pref.IsOptedOut(req.Template, req.Channel) {
-			return h.suppress(ctx, req), nil
+			span.SetAttributes(telemetry.KeySuppressed.Bool(true))
+			return h.suppress(ctx, req, channel), nil
 		}
 	}
 
@@ -96,6 +127,12 @@ func (h *Herald) Send(ctx context.Context, req *SendRequest) (*SendResult, error
 	if err != nil {
 		return nil, err
 	}
+	// prov.Driver is a registered driver's name from here on, so it is safe
+	// as a metric label.
+	span.SetAttributes(
+		telemetry.KeyDriver.String(prov.Driver),
+		telemetry.KeyProviderID.String(prov.ID.String()),
+	)
 
 	// A decryption failure is recorded on every message row below rather than
 	// returned, so the log says why nothing was delivered.
@@ -111,6 +148,8 @@ func (h *Herald) Send(ctx context.Context, req *SendRequest) (*SendResult, error
 
 	now := time.Now().UTC()
 	results := make([]*SendResult, 0, len(req.To))
+	var sent, failed int
+	var firstErr error
 	for _, recipient := range req.To {
 		msg := &message.Message{
 			ID:         id.NewMessageID(),
@@ -133,11 +172,20 @@ func (h *Herald) Send(ctx context.Context, req *SendRequest) (*SendResult, error
 		var d message.Delivery
 		if dataErr != nil {
 			d = message.Delivery{Status: message.StatusFailed, Error: dataErr.Error()}
+			h.metrics.delivery(channel, prov.Driver, dataErr, 0, false)
+			if firstErr == nil {
+				firstErr = dataErr
+			}
 		} else {
 			outbound.To = recipient
+			start := time.Now()
 			result, sendErr := drv.Send(ctx, outbound)
+			h.metrics.delivery(channel, prov.Driver, sendErr, time.Since(start), true)
 			if sendErr != nil {
 				d = message.Delivery{Status: message.StatusFailed, Error: sendErr.Error()}
+				if firstErr == nil {
+					firstErr = sendErr
+				}
 			} else {
 				sentAt := time.Now().UTC()
 				d = message.Delivery{Status: message.StatusSent, SentAt: &sentAt}
@@ -146,8 +194,14 @@ func (h *Herald) Send(ctx context.Context, req *SendRequest) (*SendResult, error
 				}
 			}
 		}
+		if d.Status == message.StatusSent {
+			sent++
+		} else {
+			failed++
+		}
 		if logged {
 			if err := h.store.RecordDelivery(ctx, msg.ID, d); err != nil {
+				h.metrics.logWriteFailed(logOpRecordDelivery)
 				h.logger.Warn("herald: failed to record delivery", "message_id", msg.ID.String(), "error", err)
 			}
 		}
@@ -176,8 +230,14 @@ func (h *Herald) Send(ctx context.Context, req *SendRequest) (*SendResult, error
 		})
 	}
 
+	span.SetAttributes(telemetry.KeySent.Int(sent), telemetry.KeyFailed.Int(failed))
 	if len(results) == 0 {
+		h.metrics.reject(channel, reasonNoRecipients)
+		telemetry.Fail(span, reasonNoRecipients, "")
 		return &SendResult{Status: message.StatusFailed, Error: "no recipients"}, nil
+	}
+	if failed > 0 {
+		telemetry.FailErr(span, classDeliveryFailed, firstErr)
 	}
 
 	r := results[0]
@@ -201,8 +261,9 @@ func (h *Herald) ResolveProvider(ctx context.Context, appID, orgID, userID, chan
 	return h.resolver.ResolveProvider(ctx, appID, orgID, userID, channel)
 }
 
-// suppress records an opted-out send without calling any driver.
-func (h *Herald) suppress(ctx context.Context, req *SendRequest) *SendResult {
+// suppress records an opted-out send without calling any driver. channel is
+// req.Channel clamped for telemetry.
+func (h *Herald) suppress(ctx context.Context, req *SendRequest, channel string) *SendResult {
 	const reason = "user opted out"
 	now := time.Now().UTC()
 	var first *SendResult
@@ -221,6 +282,7 @@ func (h *Herald) suppress(ctx context.Context, req *SendRequest) *SendResult {
 			CreatedAt:  now,
 		}
 		logged := h.logMessage(ctx, msg)
+		h.metrics.suppress(channel)
 		if first == nil {
 			first = &SendResult{MessageID: msg.ID, Status: message.StatusSuppressed, Error: reason, Logged: logged}
 		}
@@ -238,6 +300,7 @@ func (h *Herald) suppress(ctx context.Context, req *SendRequest) *SendResult {
 // write never blocks the send.
 func (h *Herald) logMessage(ctx context.Context, msg *message.Message) bool {
 	if err := h.store.CreateMessage(ctx, msg); err != nil {
+		h.metrics.logWriteFailed(logOpCreate)
 		h.logger.Warn("herald: could not write the message log; sending anyway",
 			"channel", msg.Channel, "status", string(msg.Status), "error", err)
 		return false
@@ -246,11 +309,26 @@ func (h *Herald) logMessage(ctx context.Context, msg *message.Message) bool {
 }
 
 // renderRequest renders the template, or uses the raw subject and body. A
-// template is used only when Template is set and Body is empty.
+// template is used only when Template is set and Body is empty, and only
+// then is there a "render template" span.
 func (h *Herald) renderRequest(ctx context.Context, req *SendRequest) (*template.RenderedContent, error) {
 	if req.Template == "" || req.Body != "" {
 		return &template.RenderedContent{Subject: req.Subject, Text: req.Body}, nil
 	}
+	ctx, span := telemetry.Tracer().Start(ctx, spanRender, trace.WithAttributes(
+		telemetry.KeyTemplate.String(req.Template),
+	))
+	defer span.End()
+	rendered, err := h.render(ctx, req, span)
+	if err != nil {
+		reason, errType := classify(err)
+		telemetry.Fail(span, reason, errType)
+	}
+	return rendered, err
+}
+
+// render loads req's template and renders it under span.
+func (h *Herald) render(ctx context.Context, req *SendRequest, span trace.Span) (*template.RenderedContent, error) {
 	tmpl, err := h.store.GetTemplateBySlug(ctx, req.AppID, req.Template, req.Channel)
 	if err != nil {
 		if errors.Is(err, ErrTemplateNotFound) {
@@ -265,12 +343,38 @@ func (h *Herald) renderRequest(ctx context.Context, req *SendRequest) (*template
 	if locale == "" {
 		locale = h.config.DefaultLocale
 	}
+	// The span reports the version's locale, which is template data, and how
+	// it matched. The requested locale is the caller's and stays off it.
+	version, match := template.Resolve(tmpl, locale)
+	span.SetAttributes(telemetry.KeyLocaleMatch.String(string(match)))
+	if version != nil {
+		span.SetAttributes(telemetry.KeyLocale.String(version.Locale))
+	}
 	return h.renderer.Render(tmpl, locale, req.Data)
 }
 
 // resolveForSend returns the chosen provider when the request names one, and
-// otherwise runs the scope resolver.
+// otherwise runs the scope resolver, under a "resolve provider" span.
 func (h *Herald) resolveForSend(ctx context.Context, req *SendRequest) (*scope.ResolveResult, error) {
+	ctx, span := telemetry.Tracer().Start(ctx, spanResolve, trace.WithAttributes(
+		telemetry.KeyChannel.String(channelLabel(req.Channel)),
+	))
+	defer span.End()
+	res, err := h.resolve(ctx, req)
+	if err != nil {
+		reason, errType := classify(err)
+		telemetry.Fail(span, reason, errType)
+		return nil, err
+	}
+	span.SetAttributes(
+		telemetry.KeyResolveVia.String(res.Via),
+		telemetry.KeyProviderID.String(res.Provider.ID.String()),
+	)
+	return res, nil
+}
+
+// resolve is resolveForSend under its span.
+func (h *Herald) resolve(ctx context.Context, req *SendRequest) (*scope.ResolveResult, error) {
 	if req.ProviderID == "" {
 		res, err := h.resolver.ResolveProvider(ctx, req.AppID, req.OrgID, req.UserID, req.Channel)
 		if err != nil {
@@ -359,8 +463,19 @@ func smsSender(settings map[string]string) string {
 	return ""
 }
 
-// Notify sends a notification across multiple channels using a template.
+// Notify sends a notification across multiple channels using a template,
+// under a "notify channels" span with one "send notification" span per
+// channel.
 func (h *Herald) Notify(ctx context.Context, req *NotifyRequest) ([]*SendResult, error) {
+	ctx, span := telemetry.Tracer().Start(ctx, spanNotify, trace.WithAttributes(
+		telemetry.KeyChannelCount.Int(len(req.Channels)),
+		telemetry.KeyRecipientCount.Int(len(req.To)),
+	))
+	defer span.End()
+	if req.Template != "" {
+		span.SetAttributes(telemetry.KeyTemplate.String(req.Template))
+	}
+
 	var results []*SendResult
 
 	for _, ch := range req.Channels {
@@ -397,11 +512,16 @@ func (h *Herald) Notify(ctx context.Context, req *NotifyRequest) ([]*SendResult,
 
 	// Audit the multi-channel notify.
 	outcome := bridge.OutcomeSuccess
+	failed := 0
 	for _, r := range results {
 		if r.Status == message.StatusFailed {
 			outcome = bridge.OutcomeFailure
-			break
+			failed++
 		}
+	}
+	span.SetAttributes(telemetry.KeyChannelsFailed.Int(failed))
+	if failed > 0 {
+		span.SetStatus(codes.Error, classChannelFailed)
 	}
 	h.Audit(ctx, bridge.SeverityInfo, outcome, "notification.notify", "message", "", req.UserID, req.AppID, "notification", map[string]string{
 		"template":       req.Template,

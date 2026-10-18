@@ -120,7 +120,7 @@ func (d *Driver) Send(ctx context.Context, msg *driver.OutboundMessage) (*driver
 
 	signV4(httpReq, jsonBody, accessKeyID, secretAccessKey, region, "ses")
 
-	httpClient := &http.Client{Timeout: 10 * time.Second}
+	httpClient := driver.HTTPClient(10*time.Second, driver.Endpoint{Driver: "ses", URLTemplate: "/v2/email/outbound-emails"})
 	resp, err := httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("ses: send request: %w", err)
