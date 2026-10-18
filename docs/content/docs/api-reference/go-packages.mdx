@@ -61,6 +61,7 @@ func WithLogger(logger *slog.Logger) Option
 func WithDefaultLocale(locale string) Option
 func WithMaxBatchSize(n int) Option // stored, not read yet
 func WithChronicle(c bridge.Chronicle) Option
+func WithMetrics(m metrics.Metrics) Option // github.com/xraph/go-utils/metrics; nil records nothing
 func WithCredentialKey(keyID string, key []byte) Option
 func WithPreviousCredentialKey(keyID string, key []byte) Option
 ```
@@ -512,6 +513,16 @@ func NewRegistry() *Registry
 func (r *Registry) Register(d Driver)
 func (r *Registry) Get(name string) (Driver, error)
 func (r *Registry) List() []Driver
+
+// HTTPClient is the client an HTTP driver uses for its vendor: an
+// http.Client with timeout that records each call as a client span.
+func HTTPClient(timeout time.Duration, ep Endpoint) *http.Client
+
+type Endpoint struct {
+    Driver      string // herald.driver on the span
+    URLTemplate string // names the span; the real URL is never recorded
+    HideHost    bool   // leave server.address off, for a URL the user supplies
+}
 ```
 
 ### Built-in Drivers

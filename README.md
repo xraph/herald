@@ -227,6 +227,8 @@ During `Register` the extension:
 
 The REST API lives under `/herald/v1`: `providers`, `templates` (with `versions`), `send`, `notify`, `messages`, `inbox`, `preferences` and `config` for routing rules. With no middleware, the extension logs a warning, because anyone who can reach the API can read and change notification data. Pass your auth middleware with `WithAPIMiddleware`.
 
+Every send is traced and measured as well. The extension hands `app.Metrics()` to Herald, so `forge_herald_deliveries_attempted_total`, `forge_herald_delivery_duration_seconds` and three more series show up on `/_/metrics`, and each send is a `send notification` span with the template render, the provider lookup and the vendor call under it. Spans never carry a recipient, the message, a credential or a vendor URL, and Herald sends vendors no trace headers. Outside Forge, pass `herald.WithMetrics` and install a tracer provider yourself. [Observability](https://www.xraph.com/docs/herald/subsystems/observability) lists every span and metric.
+
 The extension also registers a contract contributor for the [Forge dashboard](https://github.com/xraph/forge-dashboard). [MIGRATION.md](MIGRATION.md) explains what replaced the old templ dashboard.
 
 ## Configuration
@@ -286,6 +288,7 @@ heraldext.New(
 | Respect opt-outs and build a bell icon | [Preferences](https://www.xraph.com/docs/herald/subsystems/preferences), [inbox](https://www.xraph.com/docs/herald/subsystems/inbox) |
 | Run it on a database | [PostgreSQL](https://www.xraph.com/docs/herald/stores/postgres), [SQLite](https://www.xraph.com/docs/herald/stores/sqlite), [MongoDB](https://www.xraph.com/docs/herald/stores/mongo) |
 | Mount it in Forge | [Forge extension guide](https://www.xraph.com/docs/herald/guides/forge-extension), [HTTP API](https://www.xraph.com/docs/herald/api-reference/http-api) |
+| Trace and alert on sends | [Observability](https://www.xraph.com/docs/herald/subsystems/observability) |
 
 The Go API is on [pkg.go.dev](https://pkg.go.dev/github.com/xraph/herald). [CHANGELOG.md](CHANGELOG.md) lists what changed in each release, breaking changes first.
 

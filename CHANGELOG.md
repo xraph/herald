@@ -1,5 +1,30 @@
 # Changelog
 
+## v1.8.0
+
+Every send is traced and measured now. In a Forge app you get it with nothing to configure.
+
+### Before you upgrade
+
+- Herald needs forge v1.12.9, grove v1.8.0 (and its mongo, pg and sqlite drivers), chronicle v1.9.0 and, for `drivers/webhook`, relay v1.8.0. Forge v1.12.9 keeps the default and logs a warning when a value under `extensions.herald` doesn't convert to its field's type, where it used to bind it as zero. A contract error now answers with its own HTTP status, so a replayed command that conflicts gets a 409, not a 500.
+- Relay v1.8.0 renamed its delivery metrics. If you alert on `relay_deliveries_total` or `relay_delivery_latency_seconds` for webhooks sent through the webhook driver with Relay, move those alerts to relay's new names.
+- Every driver module requires herald v1.8.0, since they all use the new `driver.HTTPClient`. Upgrading a driver upgrades the root with it.
+
+### Tracing
+
+- `Send` records a `send notification` span with `render template` and `resolve provider` under it, and `Notify` a `notify channels` span over its sends. The spans carry the channel, the template slug, the driver, the provider ID, how the provider was picked and counts of recipients, sent and failed deliveries. They never carry a recipient, template data, subject, body, metadata, credential, user ID or the requested locale.
+- Every vendor call is a client span. `driver.HTTPClient(timeout, driver.Endpoint{...})` is the client every HTTP driver uses now: it behaves like `&http.Client{Timeout: timeout}`, names the span after a URL template the driver supplies (`POST /3/device/{device_token}`) and never records the URL itself. Slack and Discord webhooks and the webhook driver record no host either. SMTP gets a `send smtp` span with the server's address and port.
+- Vendors get no `traceparent`, `tracestate` or baggage from Herald.
+- A failed span carries a class (`template_not_found`, `delivery_failed`, a status code, `timeout`) and the error's type, never its message.
+
+### Metrics
+
+- `herald.WithMetrics(m)` records on a go-utils metrics sink, and the Forge extension passes `app.Metrics()`. The series scrape as `forge_herald_deliveries_attempted_total`, `forge_herald_delivery_duration_seconds`, `forge_herald_messages_suppressed_total`, `forge_herald_sends_rejected_total` and `forge_herald_message_log_writes_failed_total`. Their labels (`channel`, `driver`, `result`, `reason`, `op`) only take the values the observability page lists.
+
+### Docs
+
+- The observability page lists every span and metric, and no longer promises event hooks that don't exist.
+
 ## v1.7.0
 
 This release hardens providers, stores, templates and the REST API. Some of it breaks things, so read the first section before you upgrade.

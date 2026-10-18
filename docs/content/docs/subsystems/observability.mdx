@@ -1,17 +1,157 @@
 ---
 title: Observability
-description: Monitor Herald with structured logging via slog, the message delivery log, and the event hook system.
+description: OpenTelemetry spans and forge_herald_* metrics for every send, structured logging through slog, and the message delivery log.
 ---
 
-Herald provides observability through three mechanisms: structured logging using Go's `log/slog`, a persistent message delivery log stored in the database, and event hooks that fire on key lifecycle events.
+You can watch Herald four ways. Every send is an OpenTelemetry trace, and Herald records delivery metrics on a go-utils metrics sink. It logs through Go's `log/slog`. And every recipient of every send gets a row in the message log, in your own database.
 
-## Structured Logging with slog
+In a Forge app the first two need no setup at all. Register the extension, send something, and open `/_/metrics`.
 
-Herald uses Go's standard `log/slog` package for all internal logging. Log messages are structured with key-value pairs, making them easy to filter, search, and aggregate in log management systems.
+## Traces and metrics in a Forge app
 
-### Configuring the Logger
+The extension hands `app.Metrics()` to `herald.WithMetrics`, so the `forge_herald_*` series show up on the app's scrape. Spans go to the global tracer provider, which `forge.New` installs, so they land wherever your Forge tracing exports to.
 
-When using Herald directly, pass a logger with the `WithLogger` option:
+You get more than Herald's own spans under a send. Grove v1.8.0 traces every query Herald runs (`db.client` spans), so the template lookup sits under `render template` and the routing rule lookups under `resolve provider`. The webhook driver's `relay.Send` is traced by Relay.
+
+A `herald.WithMetrics` you pass through `WithHeraldOption` wins over the app's metrics, since the extension puts its own first.
+
+## Outside Forge
+
+Pass any go-utils `metrics.Metrics` and install a tracer provider yourself:
+
+```go
+import (
+    "go.opentelemetry.io/otel"
+    sdktrace "go.opentelemetry.io/otel/sdk/trace"
+)
+
+otel.SetTracerProvider(sdktrace.NewTracerProvider( /* your exporter */ ))
+
+h, err := herald.New(
+    herald.WithStore(myStore),
+    herald.WithMetrics(myMetrics), // nil, the default, records nothing
+    herald.WithDriver(&email.SMTPDriver{}),
+)
+```
+
+Without a provider the spans cost next to nothing and go nowhere. Without `WithMetrics` nothing is recorded. Outside Forge the metric names have no `forge_` prefix: `herald_deliveries_attempted_total` and so on.
+
+## Spans
+
+| Span | Kind | Parent | Attributes |
+|------|------|--------|------------|
+| `notify channels` | Internal | the caller's span | `herald.template`, `herald.channel.count`, `herald.channel.failed`, `herald.recipient.count` |
+| `send notification` | Internal | the caller's span, or `notify channels` | `herald.channel`, `herald.template`, `herald.recipient.count`, `herald.driver`, `herald.provider.id`, `herald.suppressed`, `herald.delivery.sent`, `herald.delivery.failed` |
+| `render template` | Internal | `send notification` | `herald.template`, `herald.template.locale`, `herald.template.locale_match` |
+| `resolve provider` | Internal | `send notification`, or the caller's span for `PreviewSend` | `herald.channel`, `herald.resolve.via`, `herald.provider.id` |
+| `POST /v3/mail/send` and the like | Client | `send notification` | `http.request.method`, `server.address`, `server.port`, `url.template`, `herald.driver`, `http.response.status_code`, `error.type` |
+| `send smtp` | Client | `send notification` | `server.address`, `server.port` |
+
+`render template` only exists when the send uses a template (`Template` set and `Body` empty). `herald.driver` and `herald.provider.id` are set once the provider and its driver are known, and `herald.suppressed` only when the user opted out, in which case no driver runs and there are no client spans.
+
+There is one vendor client span per recipient, since each recipient is a separate vendor call. There is no internal span per recipient: the send span carries the counts and the metrics carry the outcomes.
+
+The attributes that take a fixed set of values:
+
+- `herald.channel`: `email`, `sms`, `push`, `inapp`, `webhook`, `chat`, or `other` for anything else the caller passed.
+- `herald.resolve.via`: `user`, `org`, `app` (a routing rule at that level), `fallback` (no rule, the first enabled provider by priority) or `chosen` (the request named the provider).
+- `herald.template.locale_match`: `exact`, `language` (`fr` answering `fr-CA`), `default` (the version with no locale) or `none`. `herald.template.locale` is the locale of the version that was picked, not the one the caller asked for.
+
+### Vendor calls
+
+Every HTTP driver builds its client with `driver.HTTPClient`, which names the span after the method and a URL template the driver supplies. The template comes from the driver's code and never from the request, so a token, device token or account ID in the real URL can't reach the span.
+
+| Driver | Client span |
+|--------|-------------|
+| `smtp` | `send smtp` |
+| `resend` | `POST /emails` |
+| `twilio` | `POST /2010-04-01/Accounts/{account_sid}/Messages.json` |
+| `fcm` | `POST /v1/projects/{project_id}/messages:send` |
+| `apns` | `POST /3/device/{device_token}` |
+| `cloudflare` | `POST /client/v4/accounts/{account_id}/email/sending/send` |
+| `mailgun` | `POST /v3/{domain}/messages` |
+| `messagebird` | `POST /messages` |
+| `postmark` | `POST /email` |
+| `sendgrid` | `POST /v3/mail/send` |
+| `ses` | `POST /v2/email/outbound-emails` |
+| `slack` with `bot_token` | `POST /api/chat.postMessage` |
+| `vonage` | `POST /sms/json` |
+| `slack` with `webhook_url`, `discord`, `webhook` | `POST`, with no `server.address`, `server.port` or `url.template` |
+| `webhook` with Relay | Relay's own spans |
+| `inapp` | none, it makes no call |
+
+You hand Slack and Discord webhooks and the webhook driver the whole URL, token included, and the webhook driver's host is your customer's. That's why those spans carry neither the host nor a template.
+
+The request goes to the vendor with the headers the driver set and nothing else. Herald injects no `traceparent`, no `tracestate` and none of the inbound request's baggage, because a vendor is a third party.
+
+If you write your own driver, build its client the same way (see [Writing a custom driver](/docs/subsystems/drivers#writing-a-custom-driver)).
+
+### Failures
+
+A failed span has a short class as its status description and an `exception` event that carries only `exception.type`. The error's message never goes on a span. Driver errors quote up to 1KB of the vendor's response, and SMTP replies usually quote the recipient.
+
+| Span | Status descriptions | `exception.type` |
+|------|---------------------|------------------|
+| `send notification`, `render template`, `resolve provider` | `template_not_found`, `template_disabled`, `no_locale`, `missing_variable`, `render_failed`, `no_provider`, `provider_not_found`, `invalid_channel`, `driver_not_found`, `other` | the sentinel's name, such as `herald.ErrTemplateNotFound`, or the Go type for `other` |
+| `send notification` | `no_recipients`, and `delivery_failed` when any recipient's delivery failed | the Go type of the first delivery error, for `delivery_failed` |
+| `notify channels` | `channel_failed` | none |
+| HTTP client spans | the status code for a 4xx or 5xx (`422`, `503`), or `timeout`, `canceled`, `dns`, `tls`, `connection`, `other`; `error.type` holds the same value | the Go type, for a transport failure |
+| `send smtp` | the server's reply code (`535`, `550`), or `timeout`, `canceled`, `dns`, `tls`, `connection`, `other` | the Go type, such as `*textproto.Error` |
+
+A user who opted out is not a failure.
+
+### What never goes on a span
+
+A span never holds a recipient address, template data, the subject, body or title, metadata, a credential (Herald decrypts them for the driver, and they stay with the driver), a user or org ID, or the locale the caller asked for. It never holds a URL, path, query or header, or any error text. App IDs aren't recorded either. The template slug and the provider ID are, since they name your configuration and not a person.
+
+## Metrics
+
+| Scraped name | Type | Labels |
+|--------------|------|--------|
+| `forge_herald_deliveries_attempted_total` | counter | `channel`, `driver`, `result` |
+| `forge_herald_delivery_duration_seconds` | histogram | `channel`, `driver`, `result` |
+| `forge_herald_messages_suppressed_total` | counter | `channel` |
+| `forge_herald_sends_rejected_total` | counter | `channel`, `reason` |
+| `forge_herald_message_log_writes_failed_total` | counter | `op` |
+
+Deliveries are counted per recipient. The duration is how long the driver took to deliver to one recipient, which for an HTTP or SMTP driver is mostly the vendor's time. Its buckets run from 10ms to 30s (0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30), since the HTTP drivers give up at 10 seconds and SMTP at 30. A delivery that failed because the provider's credentials couldn't be decrypted counts as `result="error"` with no duration, because no driver ran.
+
+A rejected send is one that failed before any delivery, so `Send` returned an error (or, for `no_recipients`, a failed result). A suppressed recipient is one who opted out. A failed log write means a message row is missing from the log even though the send went ahead (`SendResult.Logged` is false).
+
+Every label takes a value from a fixed list:
+
+| Label | Values |
+|-------|--------|
+| `channel` | `email`, `sms`, `push`, `inapp`, `webhook`, `chat`, `other` |
+| `driver` | the name of a registered driver: `smtp`, `resend`, `twilio`, `fcm`, `inapp`, and `apns`, `cloudflare`, `discord`, `mailgun`, `messagebird`, `postmark`, `sendgrid`, `ses`, `slack`, `vonage`, `webhook` when you register them, or your own driver's `Name()` |
+| `result` | `ok`, `error` |
+| `reason` | `template_not_found`, `template_disabled`, `no_locale`, `missing_variable`, `render_failed`, `no_provider`, `provider_not_found`, `invalid_channel`, `driver_not_found`, `no_recipients`, `other` |
+| `op` | `create` (the message row), `record_delivery` (its outcome) |
+
+`driver` is only ever a name the registry found, so a provider row that names a driver nobody registered shows up as `reason="driver_not_found"`, not as a new driver label. App IDs, template slugs, provider IDs and recipients are never labels.
+
+Some queries to start from:
+
+```text
+# Share of deliveries failing, per driver
+sum by (driver) (rate(forge_herald_deliveries_attempted_total{result="error"}[5m]))
+  /
+sum by (driver) (rate(forge_herald_deliveries_attempted_total[5m]))
+
+# p95 delivery latency per driver
+histogram_quantile(0.95,
+  sum by (le, driver) (rate(forge_herald_delivery_duration_seconds_bucket[5m])))
+
+# Sends failing before delivery, by reason
+sum by (reason) (rate(forge_herald_sends_rejected_total[5m]))
+
+# Message log rows going missing
+sum by (op) (rate(forge_herald_message_log_writes_failed_total[5m])) > 0
+```
+
+## Structured logging with slog
+
+Herald's core logs through `log/slog` with key-value fields. Pass your own logger with `WithLogger`:
 
 ```go
 logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
@@ -25,62 +165,39 @@ h, err := herald.New(
 )
 ```
 
-If no logger is provided, Herald defaults to `slog.Default()`.
+Without one, Herald uses `slog.Default()`. So does the Forge extension: it doesn't pass the app's logger to the core, so if you want the core's lines in your Forge logger, pass `heraldext.WithHeraldOption(herald.WithLogger(...))`. The extension and the REST API log through `forge.Logger` as usual.
 
-### Log Messages
-
-Herald emits structured log messages at key points in the delivery pipeline:
-
-**Debug level** -- Provider resolution and delivery details:
+The lines you'll see at debug level and above:
 
 ```go
-h.logger.Debug("herald: resolved provider via fallback",
-    "provider", p.Name,
-    "channel", channel,
-    "app_id", appID,
-)
+// Debug, when no routing rule applies
+r.logger.Debug("herald: resolved provider via fallback",
+    "provider", p.Name, "channel", channel, "app_id", appID)
 
-h.logger.Debug("herald: user opted out",
-    "user_id", req.UserID,
-    "template", req.Template,
-    "channel", channel,
-)
-```
+// Warn, a send went ahead but its log row didn't save
+h.logger.Warn("herald: could not write the message log; sending anyway",
+    "channel", msg.Channel, "status", string(msg.Status), "error", err)
+h.logger.Warn("herald: failed to record delivery",
+    "message_id", msg.ID.String(), "error", err)
 
-**Warn level** -- Non-fatal issues during delivery:
-
-```go
+// Warn, one channel of a Notify failed
 h.logger.Warn("herald: notify channel failed",
-    "channel", ch,
-    "template", req.Template,
-    "error", err,
-)
+    "channel", ch, "template", req.Template, "error", err)
 
-h.logger.Warn("herald: failed to seed template",
-    "slug", tmpl.Slug,
-    "channel", tmpl.Channel,
-    "error", err,
-)
-
-h.logger.Warn("herald: invalid provider ID in scoped config",
-    "provider_id", pidStr,
-    "scope", scopeType,
-    "scope_id", scopeID,
-)
+// Warn, a routing rule Herald had to skip
+r.logger.Warn("herald: invalid provider ID in scoped config",
+    "app_id", appID, "provider_id", pidStr, "scope", scopeType, "scope_id", scopeID)
+r.logger.Warn("herald: scoped config names a provider it can't use; ignoring the rule",
+    "app_id", appID, "scope", scopeType, "scope_id", scopeID, "provider_id", pidStr, "reason", reason)
 ```
 
-These structured fields make it easy to build queries in your logging platform:
+Seeding templates and providers logs at info and warn too. Filter on `channel`, `template` or `app_id` in your logging platform to narrow things down.
 
-- Filter by `channel` to see all email delivery events
-- Filter by `template` to track a specific notification type
-- Filter by `app_id` to isolate a single application
-- Filter by `error` to find all delivery failures
+## Message delivery log
 
-## Message Delivery Log
+Every delivery attempt is saved in the messages table. Where the metrics tell you that something is failing, the message log tells you which message, to whom, and what the vendor said.
 
-Every notification delivery attempt is persisted in the messages table. This provides a complete audit trail of all notifications sent through Herald.
-
-### Message Entity
+### Message entity
 
 ```go
 type Message struct {
@@ -104,21 +221,13 @@ type Message struct {
 }
 ```
 
-### What Gets Logged
+### What gets saved
 
-For every recipient of every `Send` call, Herald creates a message record capturing:
+For every recipient of every `Send` call, Herald writes a message row with the recipient, app and environment, the channel and template, the subject and body (truncated), the provider, the status and error, the send time, and your metadata.
 
-- **Who**: `Recipient`, `AppID`, `EnvID`
-- **What**: `Channel`, `TemplateID`, `Subject`, `Body` (truncated)
-- **How**: `ProviderID`, `Attempts`
-- **Result**: `Status`, `Error`, `SentAt`, `DeliveredAt`
-- **Context**: `Metadata` (application-specific key-value pairs)
+The `Body` field is cut at `TruncateBodyAt` bytes (default: 4096) to keep the log compact while keeping enough to debug with.
 
-The `Body` field is truncated to `TruncateBodyAt` characters (default: 4096) to keep the delivery log compact while retaining enough content for debugging.
-
-### Status Tracking
-
-Messages progress through a lifecycle of states:
+### Status tracking
 
 | Status | Description |
 |--------|-------------|
@@ -148,9 +257,7 @@ if sendErr != nil {
 _ = h.store.RecordDelivery(ctx, msg.ID, d)
 ```
 
-### Querying the Delivery Log
-
-Messages can be queried through the store or API with filtering and pagination:
+### Querying the delivery log
 
 ```go
 messages, err := store.ListMessages(ctx, appID, message.ListOptions{
@@ -161,7 +268,7 @@ messages, err := store.ListMessages(ctx, appID, message.ListOptions{
 })
 ```
 
-#### API Endpoints
+#### API endpoints
 
 | Method | Path | Operation |
 |--------|------|-----------|
@@ -174,7 +281,7 @@ Example: list all failed email deliveries:
 GET /herald/messages?app_id=app_01abc...&channel=email&status=failed&limit=20
 ```
 
-### Store Interface
+### Store interface
 
 ```go
 type Store interface {
@@ -186,59 +293,28 @@ type Store interface {
 }
 ```
 
-## Monitoring Patterns
+## Monitoring patterns
 
-### Failed Delivery Alerting
+Alert on the metrics and investigate in the log. Failure rate and latency per driver come straight from `forge_herald_deliveries_attempted_total` and `forge_herald_delivery_duration_seconds` (see the queries above), so you don't need to poll the messages table or work out latency from `CreatedAt` and `SentAt` yourself.
 
-Query the messages table periodically for failed deliveries to trigger alerts:
+When a driver's failure rate climbs, list its failed messages to see what the vendor said:
 
 ```go
 failed, err := store.ListMessages(ctx, appID, message.ListOptions{
-    Status: message.StatusFailed,
-    Limit:  100,
+    Channel: "email",
+    Status:  message.StatusFailed,
+    Limit:   100,
 })
-
-if len(failed) > threshold {
-    // Trigger alert
+for _, msg := range failed {
+    // msg.ProviderID is the provider that handled it, msg.Error is why it failed
 }
 ```
 
-### Delivery Rate Tracking
+`CountMessages(ctx, appID, since)` gives you counts by status and channel for one app, and it's what the dashboard's overview reads. The metrics deliberately can't break things down by app, so this is where to look when you need that.
 
-Use the `CreatedAt` and `SentAt` timestamps to measure delivery latency:
+A trace answers the last question, where the time went in one send: the template lookup, the routing rules, or the vendor.
 
-```go
-for _, msg := range messages {
-    if msg.SentAt != nil {
-        latency := msg.SentAt.Sub(msg.CreatedAt)
-        // Record latency metric
-    }
-}
-```
-
-### Per-Channel Health
-
-List messages filtered by channel and status to monitor the health of individual channels:
-
-```go
-// Check email delivery success rate
-allEmail, _ := store.ListMessages(ctx, appID, message.ListOptions{Channel: "email", Limit: 1000})
-failedEmail, _ := store.ListMessages(ctx, appID, message.ListOptions{Channel: "email", Status: message.StatusFailed, Limit: 1000})
-
-successRate := 1.0 - float64(len(failedEmail)) / float64(len(allEmail))
-```
-
-### Per-Provider Tracking
-
-Each message records the `ProviderID` that was used for delivery. This allows you to track provider-level reliability:
-
-```go
-msg, _ := store.GetMessage(ctx, messageID)
-// msg.ProviderID tells you which provider handled this delivery
-// msg.Error tells you what went wrong (if failed)
-```
-
-## Health Check
+## Health check
 
 Herald exposes a `Health` method that pings the underlying store to verify database connectivity:
 

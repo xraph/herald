@@ -66,6 +66,7 @@ Nothing in CI compiles or tests a driver module. The release workflow is the fir
 | Path | What lives there |
 |---|---|
 | `herald.go`, `options.go`, `config.go` | The `Herald` engine: `Send`, `Notify`, provider resolution, the functional options |
+| `telemetry.go` | Span and metric names, the label values, and the reasons a send is rejected |
 | `errors.go` | Root sentinels, many re-exported from `store` and `template` |
 | `providers.go`, `routing.go`, `sendpreview.go` | Provider CRUD with validation, routing rule checks, `PreviewSend` |
 | `id/` | TypeID identifiers (`hpvd_`, `htpl_`, `htpv_`, `hmsg_`, `hinb_`, `hprf_`, `hscf_`) |
@@ -77,6 +78,7 @@ Nothing in CI compiles or tests a driver module. The release workflow is the fir
 | `store/memory`, `store/sqlite`, `store/postgres`, `store/mongo` | Backends (the last three take a `*grove.DB`) |
 | `store/storetest/` | The conformance suite every backend runs |
 | `internal/storeerr/` | Sentinels `scope` needs without importing `store` (which imports `scope`) |
+| `internal/telemetry/` | The tracer, attribute keys and error classes every span shares. `metricsvec/` caches labelled series on a go-utils sink, and `telemetrytest/` has the span recorder and fake sink the tests use |
 | `driver/` | The `Driver` interface, registry, field schemas and the built-in drivers |
 | `drivers/` | Opt-in driver modules, one `go.mod` each |
 | `bridge/` | Herald's own slim `Chronicle` audit interface, a slog fallback, and `chronicleadapter` for the real chronicle |
@@ -97,7 +99,17 @@ Adding a field to an entity is more work than it looks. You'll change the struct
 
 A driver implements `driver.Driver` (`Name`, `Channel`, `Send`, `Validate`) and usually `driver.Describer`, whose `Fields()` says which keys are credentials and which are settings. Get the placement right. Herald refuses a provider that keeps a setting in its credentials, and you'll get `ErrInvalidProvider` from create and update (seeding only logs a warning).
 
-The core logs with `*slog.Logger` (`WithLogger`, defaulting to `slog.Default()`). `api/` and `extension/` log through `forge.Logger`.
+The core logs with `*slog.Logger` (`WithLogger`, defaulting to `slog.Default()`). `api/` and `extension/` log through `forge.Logger`. The extension doesn't hand its logger to the core.
+
+### Telemetry
+
+`Send` and `Notify` record spans on the global tracer provider and metrics on the sink from `WithMetrics`, which the extension fills with `app.Metrics()`. The observability docs page lists every span, attribute, metric and label value; keep it in step when you change one.
+
+A driver that calls an HTTP API builds its client with `driver.HTTPClient(timeout, driver.Endpoint{...})`, never `&http.Client{}`. Give it a URL template with placeholders for anything variable in the path, and set `HideHost` when the user supplies the whole URL. The client injects no trace headers, since vendors are third parties.
+
+Keep spans and labels narrow. A recipient, template data, subject, body, metadata, credential, user ID or URL must never reach either, and neither may an error's message, because driver errors quote vendor responses. A failed span gets a class and `exception.type` through `telemetry.Fail` or `telemetry.FailErr`. Labels take only the documented values, so clamp anything a caller supplies (`channelLabel` does this for the channel) and use a driver name only after the registry found it. Template slugs and provider IDs may go on spans, never on labels.
+
+Telemetry tests install a span recorder as the global provider (`telemetrytest.Spans`), so they can't run in parallel. Each one feeds a value like `alice@example.com` through and checks `telemetrytest.Leaks` finds it nowhere.
 
 The Forge extension embeds `*forge.BaseExtension`, loads config from `extensions.herald` or `herald`, and finds a `*grove.DB` and a `chronicle.Emitter` in the vessel container when they're registered. It provides `*herald.Herald` back into the container. `ExtensionVersion` in `extension/extension.go` is maintained by hand, and the release workflow doesn't touch it.
 
@@ -114,7 +126,7 @@ Write commit subjects with conventional prefixes (`feat(contract):`, `fix(store)
 
 ## Dependencies
 
-Herald's root requires chronicle, grove (with its mongodriver, pgdriver and sqlitedriver), forge and vessel from the xraph set, plus `go.jetify.com/typeid/v2` and the Mongo driver. `drivers/webhook` also requires relay. The other drivers need nothing beyond the root. Authsome consumes the root module. Versions live in each `go.mod`, so read them there.
+Herald's root requires chronicle, grove (with its mongodriver, pgdriver and sqlitedriver), forge, go-utils and vessel from the xraph set, plus `go.jetify.com/typeid/v2`, the Mongo driver and the OpenTelemetry API (and the SDK, which only `internal/telemetry/telemetrytest` imports). `drivers/webhook` also requires relay. The other drivers need nothing beyond the root, which brings the OTel API with it through `driver`. Authsome consumes the root module. Versions live in each `go.mod`, so read them there.
 
 To bump an xraph dependency:
 
@@ -149,7 +161,7 @@ Discovery means a new driver ships on the next release without anyone editing a 
 
 The root tag goes out in step 1, before any verification. If a driver fails to tidy or test, `vX.Y.Z` is already on the remote with no driver tags, and re-running the dispatch fails at `git tag` because the tag exists. So before you dispatch, run `./updatemod.sh` and commit whatever it changes (the release fails on any tidy diff), then run every driver's tests. If it happens anyway, fix main and release the next patch.
 
-The release doesn't touch the drivers' `require github.com/xraph/herald` line. It stays at whatever published version it names, and the replace hides that locally. So if a driver starts using root API that isn't in any published release, the driver tag from that release still names the old root, and someone who runs `go get` on the driver alone gets a root that lacks the API. Bump that require to the new root tag afterwards and release again.
+The release doesn't touch the drivers' `require github.com/xraph/herald` line. It stays at whatever published version it names, and the replace hides that locally. So if a driver starts using root API that isn't in any published release, the driver tag from that release still names the old root, and someone who runs `go get` on the driver alone gets a root that lacks the API. Raise that require to the version you're about to release, in the same change, and cut the release at exactly that version. The replace covers it until the tag exists, and the workflow pushes the root tag before it checks any driver. The drivers require v1.8.0 for this reason, since they all call `driver.HTTPClient`.
 
 ## Branch rules
 
