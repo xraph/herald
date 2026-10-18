@@ -134,8 +134,10 @@ func (e *Extension) Init(fapp forge.App) error {
 		e.opts = append(e.opts, herald.WithChronicle(bridge.NewSlogChronicle(slog.Default())))
 	}
 
-	// Build herald options from extension config + user options.
-	heraldOpts := make([]herald.Option, 0, len(e.opts)+4)
+	// Build herald options from extension config + user options. The app's
+	// metrics go first, so a herald.WithMetrics you pass yourself still wins.
+	heraldOpts := make([]herald.Option, 0, len(e.opts)+5)
+	heraldOpts = append(heraldOpts, herald.WithMetrics(fapp.Metrics()))
 	heraldOpts = append(heraldOpts, e.opts...)
 	heraldOpts = append(heraldOpts, e.config.ToHeraldOptions()...)
 
