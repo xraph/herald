@@ -76,7 +76,7 @@ func (d *Driver) Send(ctx context.Context, msg *driver.OutboundMessage) (*driver
 	}
 
 	apiURL := fmt.Sprintf("%s/accounts/%s/email/sending/send", baseURL, accountID)
-	httpClient := &http.Client{Timeout: 10 * time.Second}
+	httpClient := driver.HTTPClient(10*time.Second, driver.Endpoint{Driver: "cloudflare", URLTemplate: "/client/v4/accounts/{account_id}/email/sending/send"})
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(jsonBody))
 	if err != nil {

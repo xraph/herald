@@ -69,7 +69,7 @@ func (d *Driver) sendWebhook(ctx context.Context, webhookURL string, msg *driver
 		return nil, fmt.Errorf("slack: marshal payload: %w", err)
 	}
 
-	httpClient := &http.Client{Timeout: 10 * time.Second}
+	httpClient := driver.HTTPClient(10*time.Second, driver.Endpoint{Driver: "slack", HideHost: true})
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhookURL, bytes.NewReader(body))
 	if err != nil {
@@ -111,7 +111,7 @@ func (d *Driver) sendAPI(ctx context.Context, msg *driver.OutboundMessage) (*dri
 		return nil, fmt.Errorf("slack: marshal payload: %w", err)
 	}
 
-	httpClient := &http.Client{Timeout: 10 * time.Second}
+	httpClient := driver.HTTPClient(10*time.Second, driver.Endpoint{Driver: "slack", URLTemplate: "/api/chat.postMessage"})
 
 	baseURL := msg.Data["base_url"]
 	if baseURL == "" {

@@ -66,7 +66,7 @@ func (d *Driver) Send(ctx context.Context, msg *driver.OutboundMessage) (*driver
 		return nil, fmt.Errorf("postmark: marshal request: %w", err)
 	}
 
-	httpClient := &http.Client{Timeout: 10 * time.Second}
+	httpClient := driver.HTTPClient(10*time.Second, driver.Endpoint{Driver: "postmark", URLTemplate: "/email"})
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/email", bytes.NewReader(jsonBody))
 	if err != nil {

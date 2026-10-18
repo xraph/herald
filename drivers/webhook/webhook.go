@@ -111,7 +111,7 @@ func (d *Driver) sendViaRelay(ctx context.Context, _ string, body []byte, eventT
 }
 
 func (d *Driver) sendDirect(ctx context.Context, webhookURL string, body []byte, signingSecret string) (*driver.DeliveryResult, error) {
-	httpClient := &http.Client{Timeout: 10 * time.Second}
+	httpClient := driver.HTTPClient(10*time.Second, driver.Endpoint{Driver: "webhook", HideHost: true})
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhookURL, bytes.NewReader(body))
 	if err != nil {

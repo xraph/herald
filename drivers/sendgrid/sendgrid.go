@@ -77,7 +77,7 @@ func (d *Driver) Send(ctx context.Context, msg *driver.OutboundMessage) (*driver
 		return nil, fmt.Errorf("sendgrid: marshal request: %w", err)
 	}
 
-	httpClient := &http.Client{Timeout: 10 * time.Second}
+	httpClient := driver.HTTPClient(10*time.Second, driver.Endpoint{Driver: "sendgrid", URLTemplate: "/v3/mail/send"})
 
 	baseURL := msg.Data["base_url"]
 	if baseURL == "" {

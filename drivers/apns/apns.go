@@ -111,7 +111,7 @@ func (d *Driver) Send(ctx context.Context, msg *driver.OutboundMessage) (*driver
 	req.Header.Set("apns-topic", bundleID)
 	req.Header.Set("apns-push-type", "alert")
 
-	httpClient := &http.Client{Timeout: 10 * time.Second}
+	httpClient := driver.HTTPClient(10*time.Second, driver.Endpoint{Driver: "apns", URLTemplate: "/3/device/{device_token}"})
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("apns: send request: %w", err)
