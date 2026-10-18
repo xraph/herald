@@ -100,6 +100,8 @@ A failed span has a short class as its status description and an `exception` eve
 
 A user who opted out is not a failure.
 
+A vendor client span ends when the response headers arrive, and it judges the call by the status code alone. A timeout while the driver reads the response body never reaches it, and neither does an API that answers 200 with the failure in the body, as Vonage does with a non-zero message status and Slack's Web API does with `ok: false`. When the driver counts that as a failed delivery, the client span stays OK while the `send notification` span above it says `delivery_failed`. If the two disagree, trust the send span and the delivery metrics.
+
 ### What never goes on a span
 
 A span never holds a recipient address, template data, the subject, body or title, metadata, a credential (Herald decrypts them for the driver, and they stay with the driver), a user or org ID, or the locale the caller asked for. It never holds a URL, path, query or header, or any error text. App IDs aren't recorded either. The template slug and the provider ID are, since they name your configuration and not a person.

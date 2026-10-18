@@ -13,6 +13,7 @@ import (
 	"github.com/xraph/herald"
 	"github.com/xraph/herald/driver"
 	"github.com/xraph/herald/id"
+	"github.com/xraph/herald/internal/telemetry/telemetrytest"
 	"github.com/xraph/herald/message"
 	"github.com/xraph/herald/provider"
 	"github.com/xraph/herald/store/memory"
@@ -107,6 +108,44 @@ func TestExtensionRecordsOnTheAppMetrics(t *testing.T) {
 		if strings.Contains(grep(body, "herald"), leak) {
 			t.Errorf("%q reached the scrape", leak)
 		}
+	}
+}
+
+// TestHeraldOptionMetricsWinOverTheApps checks what the docs promise: a
+// herald.WithMetrics passed through WithHeraldOption replaces the app's
+// metrics, so the series land on your sink and not on /_/metrics.
+func TestHeraldOptionMetricsWinOverTheApps(t *testing.T) {
+	cfg := forge.DefaultAppConfig()
+	cfg.Name = "herald-telemetry-override-test"
+	cfg.Logger = forge.NewNoopLogger()
+	cfg.EnableConfigAutoDiscovery = false
+	cfg.EnableEnvConfig = false
+	app := forge.NewApp(cfg)
+
+	sink := telemetrytest.NewSink()
+	e := New(
+		WithStore(memory.New()),
+		WithDisableRoutes(),
+		WithDriver(okDriver{}),
+		WithHeraldOption(herald.WithMetrics(sink)),
+	)
+	if err := e.Register(app); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	h := e.Herald()
+	p := &provider.Provider{ID: id.NewProviderID(), AppID: "app_tel", Name: "ok", Channel: "email", Driver: "ok", Enabled: true}
+	if err := h.Store().CreateProvider(t.Context(), p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Send(t.Context(), &herald.SendRequest{AppID: "app_tel", Channel: "email", Body: "hi", To: []string{"alice@example.com"}}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	if got := sink.Get("herald_deliveries_attempted_total", "channel", "email", "driver", "ok", "result", "ok").Value(); got != 1 {
+		t.Errorf("your sink's herald_deliveries_attempted_total = %v, want 1", got)
+	}
+	if lines := grep(scrape(t, app), "forge_herald_"); lines != "" {
+		t.Errorf("the app's scrape has herald series it shouldn't:\n%s", lines)
 	}
 }
 
