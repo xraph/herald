@@ -2,7 +2,7 @@ module github.com/xraph/herald/drivers/messagebird
 
 go 1.26.0
 
-require github.com/xraph/herald v1.7.0
+require github.com/xraph/herald v1.8.0
 
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
