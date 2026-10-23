@@ -329,6 +329,6 @@ cd drivers/slack && GOWORK=off go test -race ./...   # each driver is its own mo
 
 ## License
 
-See the [Herald repository](https://github.com/xraph/herald) for license terms.
+MIT. See [LICENSE](LICENSE).
 
 Herald is part of the [forgery stack](https://github.com/xraph/forge#the-forgery-stack) built on [Forge](https://github.com/xraph/forge), by [Rex Raphael](https://github.com/juicycleff) and [contributors](https://github.com/xraph/herald/graphs/contributors).
