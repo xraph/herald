@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xraph/herald/device"
 	"github.com/xraph/herald/id"
 	"github.com/xraph/herald/inbox"
 	"github.com/xraph/herald/message"
@@ -17,7 +18,10 @@ import (
 	"github.com/xraph/herald/template"
 )
 
-var _ store.Store = (*Store)(nil)
+var (
+	_ store.Store  = (*Store)(nil)
+	_ device.Store = (*Store)(nil)
+)
 
 // Store is an in-memory implementation of herald's composite store.
 type Store struct {
@@ -29,6 +33,7 @@ type Store struct {
 	notifications map[string]*inbox.Notification
 	preferences   map[string]*preference.Preference // key: "appID:userID"
 	scopedConfigs map[string]*scope.Config          // key: "appID:scope:scopeID"
+	devices       map[string]*device.Device         // key: device ID
 }
 
 // New creates a new in-memory store.
@@ -41,6 +46,7 @@ func New() *Store {
 		notifications: make(map[string]*inbox.Notification),
 		preferences:   make(map[string]*preference.Preference),
 		scopedConfigs: make(map[string]*scope.Config),
+		devices:       make(map[string]*device.Device),
 	}
 }
 
@@ -552,4 +558,79 @@ func (s *Store) ListScopedConfigs(_ context.Context, appID string) ([]*scope.Con
 		return result[i].CreatedAt.Before(result[j].CreatedAt)
 	})
 	return result, nil
+}
+
+// ─── Device Store ──────────────────────────────
+
+func (s *Store) SaveDevice(_ context.Context, d *device.Device) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	key := device.UniqueKey(d)
+
+	for _, e := range s.devices {
+		if e.AppID == d.AppID && e.UserID == d.UserID && device.UniqueKey(e) == key {
+			d.ID, d.CreatedAt = e.ID, e.CreatedAt
+			d.UpdatedAt = now
+			s.devices[e.ID] = cloneDevice(d)
+			return nil
+		}
+	}
+
+	d.ID = id.NewDeviceID().String()
+	d.CreatedAt = now
+	d.UpdatedAt = now
+	s.devices[d.ID] = cloneDevice(d)
+	return nil
+}
+
+func (s *Store) GetDevice(_ context.Context, appID, deviceID string) (*device.Device, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	d, ok := s.devices[deviceID]
+	if !ok || d.AppID != appID {
+		return nil, device.ErrNotFound
+	}
+	return cloneDevice(d), nil
+}
+
+func (s *Store) ListDevices(_ context.Context, appID, userID string) ([]*device.Device, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []*device.Device
+	for _, d := range s.devices {
+		if d.AppID == appID && d.UserID == userID {
+			out = append(out, cloneDevice(d))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.Before(out[j].CreatedAt)
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out, nil
+}
+
+func (s *Store) DeleteDevice(_ context.Context, appID, deviceID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, ok := s.devices[deviceID]
+	if !ok || d.AppID != appID {
+		return device.ErrNotFound
+	}
+	delete(s.devices, deviceID)
+	return nil
+}
+
+func (s *Store) DeleteUserDevices(_ context.Context, appID, userID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k, d := range s.devices {
+		if d.AppID == appID && d.UserID == userID {
+			delete(s.devices, k)
+		}
+	}
+	return nil
 }

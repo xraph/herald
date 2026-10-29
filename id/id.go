@@ -31,6 +31,7 @@ const (
 	PrefixInbox           Prefix = "hinb"
 	PrefixPreference      Prefix = "hprf"
 	PrefixScopedConfig    Prefix = "hscf"
+	PrefixDevice          Prefix = "hdev"
 )
 
 // ID is the primary identifier type for all Herald entities.
@@ -121,6 +122,9 @@ type PreferenceID = ID
 // ScopedConfigID identifies a scoped provider configuration.
 type ScopedConfigID = ID
 
+// DeviceID identifies a registered device.
+type DeviceID = ID
+
 // ──────────────────────────────────────────────────
 // Convenience constructors
 // ──────────────────────────────────────────────────
@@ -146,6 +150,9 @@ func NewPreferenceID() ID { return New(PrefixPreference) }
 // NewScopedConfigID generates a new unique scoped config ID.
 func NewScopedConfigID() ID { return New(PrefixScopedConfig) }
 
+// NewDeviceID generates a new unique device ID.
+func NewDeviceID() ID { return New(PrefixDevice) }
+
 // ──────────────────────────────────────────────────
 // Convenience parsers
 // ──────────────────────────────────────────────────
@@ -170,6 +177,9 @@ func ParsePreferenceID(s string) (ID, error) { return ParseWithPrefix(s, PrefixP
 
 // ParseScopedConfigID parses a string and validates the scoped config prefix.
 func ParseScopedConfigID(s string) (ID, error) { return ParseWithPrefix(s, PrefixScopedConfig) }
+
+// ParseDeviceID parses a string and validates the device prefix.
+func ParseDeviceID(s string) (ID, error) { return ParseWithPrefix(s, PrefixDevice) }
 
 // ParseAny parses a string into an ID without type checking the prefix.
 func ParseAny(s string) (ID, error) { return Parse(s) }

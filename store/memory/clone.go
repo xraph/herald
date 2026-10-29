@@ -4,6 +4,7 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/xraph/herald/device"
 	"github.com/xraph/herald/inbox"
 	"github.com/xraph/herald/message"
 	"github.com/xraph/herald/preference"
@@ -72,6 +73,17 @@ func clonePreference(p *preference.Preference) *preference.Preference {
 				Email: cloneBool(v.Email), SMS: cloneBool(v.SMS), Push: cloneBool(v.Push), InApp: cloneBool(v.InApp),
 			}
 		}
+	}
+	return &c
+}
+
+func cloneDevice(d *device.Device) *device.Device {
+	c := *d
+	c.PublicKey = slices.Clone(d.PublicKey)
+	c.Settings = maps.Clone(d.Settings)
+	if d.QuietHours != nil {
+		q := *d.QuietHours
+		c.QuietHours = &q
 	}
 	return &c
 }
