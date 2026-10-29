@@ -171,6 +171,24 @@ func TestAPNSPushOptions(t *testing.T) {
 			wantHdr:   map[string]string{"apns-push-type": "background", "apns-priority": "5"},
 			noHeaders: []string{"apns-collapse-id", "apns-expiration"},
 		},
+		{
+			name: "background ignores urgency",
+			msg: driver.OutboundMessage{Push: &driver.PushOptions{
+				ContentAvailable: true, Urgency: driver.UrgencyPassive, TTL: time.Minute,
+				Data: map[string]string{"withdraw": "x"},
+			}},
+			wantAps: `{"content-available":1}`,
+			wantTop: map[string]string{"withdraw": "x"},
+			wantHdr: map[string]string{"apns-push-type": "background", "apns-priority": "5"},
+		},
+		{
+			name: "background ignores time sensitive",
+			msg: driver.OutboundMessage{Push: &driver.PushOptions{
+				ContentAvailable: true, Urgency: driver.UrgencyTimeSensitive, MutableContent: true,
+			}},
+			wantAps: `{"content-available":1}`,
+			wantHdr: map[string]string{"apns-push-type": "background", "apns-priority": "5"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -284,5 +302,21 @@ func TestAPNSMaxSealedPayloadFits(t *testing.T) {
 	}
 	if len(rec.body) > 4096 {
 		t.Errorf("body is %d bytes, over 4096", len(rec.body))
+	}
+}
+
+func TestAPNSNothingToSend(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits++ }))
+	t.Cleanup(srv.Close)
+	err := sendMsg(t, srv, &driver.OutboundMessage{Push: &driver.PushOptions{Urgency: driver.UrgencyActive}})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if hits != 0 {
+		t.Errorf("%d requests reached the server", hits)
+	}
+	if strings.Contains(err.Error(), "devicetoken") {
+		t.Errorf("error leaks the device token: %v", err)
 	}
 }

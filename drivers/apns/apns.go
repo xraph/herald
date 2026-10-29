@@ -79,6 +79,9 @@ func buildPayload(msg *driver.OutboundMessage) (body []byte, pushType, priority 
 	opts := msg.Push
 	hasAlert := opts == nil || msg.Title != "" || msg.Text != ""
 	background := !hasAlert && opts.ContentAvailable
+	if !hasAlert && !background {
+		return nil, "", "", errors.New("apns: nothing to send: no alert and not a background push")
+	}
 
 	aps := map[string]any{}
 	if hasAlert {
@@ -92,6 +95,18 @@ func buildPayload(msg *driver.OutboundMessage) (body []byte, pushType, priority 
 
 	top := map[string]any{}
 	if opts != nil {
+		for k, v := range opts.Data {
+			if k != "aps" {
+				top[k] = v
+			}
+		}
+	}
+	switch {
+	case background:
+		// Apple wants a background push's aps to hold content-available only.
+		aps["content-available"] = 1
+		priority = "5"
+	case opts != nil:
 		if level, ok := interruptionLevels[opts.Urgency]; ok {
 			aps["interruption-level"] = level
 		}
@@ -110,20 +125,18 @@ func buildPayload(msg *driver.OutboundMessage) (body []byte, pushType, priority 
 		if opts.ThreadID != "" {
 			aps["thread-id"] = opts.ThreadID
 		}
-		for k, v := range opts.Data {
-			if k != "aps" {
-				top[k] = v
-			}
-		}
 		priority = "10"
-		if opts.Urgency == driver.UrgencyPassive || background {
+		if opts.Urgency == driver.UrgencyPassive {
 			priority = "5"
 		}
 	}
 	top["aps"] = aps
 
 	body, err = json.Marshal(top)
-	return body, pushType, priority, err
+	if err != nil {
+		return nil, "", "", fmt.Errorf("apns: marshal payload: %w", err)
+	}
+	return body, pushType, priority, nil
 }
 
 // scrubURL drops the request URL a *url.Error carries. The URL holds the
@@ -173,7 +186,7 @@ func (d *Driver) Send(ctx context.Context, msg *driver.OutboundMessage) (*driver
 
 	body, pushType, priority, err := buildPayload(msg)
 	if err != nil {
-		return nil, fmt.Errorf("apns: marshal payload: %w", err)
+		return nil, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/3/device/%s", host, deviceToken), bytes.NewReader(body))
