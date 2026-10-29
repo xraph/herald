@@ -23,7 +23,8 @@ var testNow = time.Date(2026, 10, 28, 20, 44, 0, 0, time.UTC)
 
 type fakeDriver struct {
 	name, channel string
-	err           error
+	err           error // returned by Validate
+	sendErr       error // returned by Send
 	got           []*driver.OutboundMessage
 }
 
@@ -34,6 +35,9 @@ func (f *fakeDriver) Send(_ context.Context, msg *driver.OutboundMessage) (*driv
 	c := *msg
 	c.Data = maps.Clone(msg.Data)
 	f.got = append(f.got, &c)
+	if f.sendErr != nil {
+		return nil, f.sendErr
+	}
 	return &driver.DeliveryResult{ProviderMessageID: f.name + "-msg-1"}, nil
 }
 
@@ -87,8 +91,6 @@ func testGW(t *testing.T, mutate func(*Config)) *gateway {
 }
 
 // serverKeys returns a deterministic Ed25519 key pair from a one-byte seed.
-//
-//nolint:unparam // the private key is for the send tests that follow
 func serverKeys(seed byte) (ed25519.PublicKey, ed25519.PrivateKey) {
 	priv := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{seed}, ed25519.SeedSize))
 	pub, _ := priv.Public().(ed25519.PublicKey)

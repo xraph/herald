@@ -177,8 +177,3 @@ func (g *gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	h(w, r)
 }
-
-// serveSend is a placeholder until the send endpoint lands.
-func (g *gateway) serveSend(w http.ResponseWriter, _ *http.Request) {
-	writeError(w, http.StatusNotImplemented, "not implemented")
-}
