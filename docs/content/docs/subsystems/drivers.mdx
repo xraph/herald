@@ -1,9 +1,9 @@
 ---
 title: Drivers
-description: Built-in notification drivers for SMTP, Resend, Twilio, FCM, and InApp delivery with the Driver interface.
+description: Built-in notification drivers for SMTP, Resend, Twilio, FCM, sealed push, and InApp delivery with the Driver interface.
 ---
 
-Drivers are the low-level transport layer in Herald. Each driver knows how to deliver a message through a specific external service. Herald ships with five built-in drivers covering all four channels, and the `Driver` interface allows you to add custom drivers.
+Drivers are the low-level transport layer in Herald. Each driver knows how to deliver a message through a specific external service. Herald ships with six built-in drivers covering all four channels, and the `Driver` interface allows you to add custom drivers.
 
 ## Driver Interface
 
@@ -39,6 +39,11 @@ type OutboundMessage struct {
     Text     string            `json:"text,omitempty"`
     Title    string            `json:"title,omitempty"`
     Data     map[string]string `json:"data,omitempty"`
+
+    // Push holds per-message push options. Nil means the v1.8 behaviour.
+    Push *PushOptions `json:"-"`
+    // PublicKey is the recipient device's X25519 public key. Push fan-out only.
+    PublicKey []byte `json:"-"`
 }
 ```
 
@@ -187,12 +192,13 @@ The FCM driver delivers push notifications via the [Firebase Cloud Messaging](ht
 
 | Key | Goes in | Required | Secret | Description |
 |-----|---------|----------|--------|-------------|
-| `project_id` | Setting | Yes | No | Firebase project ID |
-| `access_token` | Credential | Conditional | Yes | OAuth2 access token (preferred) |
+| `project_id` | Setting | Conditional | No | Firebase project ID. Optional with a `service_account`, which carries its own |
+| `service_account` | Credential | Conditional | Yes | The service account JSON key. Herald mints and refreshes access tokens from it |
+| `access_token` | Credential | Conditional | Yes | OAuth2 access token. It's short-lived and Herald doesn't refresh it |
 | `server_key` | Credential | Conditional | Yes | Legacy server key (fallback) |
 | `base_url` | Setting | No | No | API base URL (empty means Google's own API) |
 
-Either `access_token` or `server_key` must be provided.
+Set one of `service_account`, `access_token` or `server_key`. If you set more than one, `service_account` wins, then `access_token`, then `server_key`.
 
 ```go
 driver := &push.FCMDriver{}
@@ -200,19 +206,71 @@ driver.Name()    // "fcm"
 driver.Channel() // "push"
 ```
 
-**How it works**: The driver sends a JSON POST to `https://fcm.googleapis.com/v1/projects/{projectID}/messages:send`. The `msg.To` field is used as the FCM device token. The driver constructs an FCM message with a notification payload (title + body) and optional data payload.
+**How it works**: The driver sends a JSON POST to `https://fcm.googleapis.com/v1/projects/{projectID}/messages:send`. The `msg.To` field is the FCM device token. The message carries a notification (title and body) and the `data.` settings as data.
+
+With a `service_account`, the driver signs a JWT, exchanges it for an access token and caches the token per key. It replaces a cached token five minutes before it expires, so you share one `FCMDriver` instead of making one per send. When `project_id` is empty it reads the key's own `project_id`. A failed mint reports the status code and nothing else, never the key or the client email.
+
+**Push options**: `DataOnly` drops the notification block and sends data alone. `Push.Data` merges into the data and wins over a `data.` setting. When there are options, the driver sets an `android` block: `collapse_key` from `CollapseID`, a `ttl` in whole seconds, and a priority that is `HIGH` for `time_sensitive` and `critical` and `NORMAL` otherwise.
+
+**Dead tokens**: An `UNREGISTERED` error, or a bad `message.token` field, comes back as `driver.ErrAddressGone`. A bad field anywhere else in the message is a bug in your payload and stays an ordinary error.
+
+---
+
+### APNs
+
+The APNs driver delivers push to iOS through Apple's HTTP/2 API. It lives in its own module, `github.com/xraph/herald/drivers/apns`, and needs Herald v1.9.0.
+
+| Key | Goes in | Required | Secret | Description |
+|-----|---------|----------|--------|-------------|
+| `key_id` | Setting | Yes | No | The key ID of your `.p8` key |
+| `team_id` | Setting | Yes | No | Your Apple team ID |
+| `bundle_id` | Setting | Yes | No | Sent as the `apns-topic` header |
+| `private_key` | Credential | Yes | Yes | The PKCS#8 PEM from Apple |
+| `sandbox` | Setting | No | No | `"true"` to use Apple's development servers |
+| `base_url` | Setting | No | No | API base URL, for tests |
 
 ```go
-type fcmMessage struct {
-    Message struct {
-        Token        string            `json:"token"`
-        Notification *fcmNotification  `json:"notification,omitempty"`
-        Data         map[string]string `json:"data,omitempty"`
-    } `json:"message"`
-}
+h, err := herald.New(
+    herald.WithStore(myStore),
+    herald.WithDriver(&apns.Driver{}),
+)
 ```
 
-If `access_token` is provided, it is sent as a Bearer token. Otherwise, the legacy `key=` server key authentication is used.
+**Payload**: Herald builds the `aps` dictionary from the message and the push options. The title and body become the alert, with the default sound. Then each option adds its own key:
+
+| Option | APNs |
+|--------|------|
+| `Urgency` | `interruption-level` (`passive`, `active`, `time-sensitive`, `critical`) and the `apns-priority` header: 5 for `passive`, 10 otherwise |
+| `critical` urgency | The sound becomes a critical sound dictionary |
+| `MutableContent` | `mutable-content: 1` |
+| `ContentAvailable` | `content-available: 1` |
+| `Category`, `ThreadID` | `category`, `thread-id` |
+| `Data` | Custom top-level keys. A key named `aps` is ignored |
+| `TTL` | The `apns-expiration` header, as a Unix time |
+| `CollapseID` | The `apns-collapse-id` header |
+
+A background push has no title and no text and sets `ContentAvailable`. It goes out with the push type `background`, priority 5, and an `aps` that holds `content-available` and nothing else, which is what Apple requires. A push with nothing to show that isn't a background push returns an error and sends nothing.
+
+**Dead tokens**: A 410, or a 400 with the reason `BadDeviceToken`, comes back as `driver.ErrAddressGone`. Transport errors have the request URL removed, since the URL holds the device token.
+
+---
+
+### Sealed
+
+The sealed driver delivers a push without letting the gateway read it. It encrypts the notification to the device's public key and posts it to a [push gateway](/docs/subsystems/push-gateway), signing the request with an Ed25519 key. The Forge extension registers it. In a library setup, use `herald.WithDriver(&push.SealedDriver{})`.
+
+| Key | Goes in | Required | Secret | Description |
+|-----|---------|----------|--------|-------------|
+| `signing_key` | Credential | Yes | Yes | Standard base64 of a 32-byte Ed25519 seed |
+| `gateway_url` | Setting | Yes | No | The gateway's address. `https`, or `http` for `localhost`, `127.0.0.1` and `::1` only |
+
+```go
+driver := &push.SealedDriver{}
+driver.Name()    // "sealed"
+driver.Channel() // "push"
+```
+
+The device's `Address` is its gateway handle and its `PublicKey` is the key the notification is sealed to. A device with no 32-byte key fails with `push.ErrMissingPublicKey`, and an envelope over `push.MaxEnvelopeBytes` fails with `push.ErrPayloadTooLarge`. A gateway 410 comes back as `driver.ErrAddressGone`. Any other status is an error that carries the gateway's own message, cut to 200 bytes. [Push gateway](/docs/subsystems/push-gateway) has the headers, the statuses and the seal format.
 
 ---
 
@@ -246,7 +304,7 @@ When using the Forge extension, all built-in drivers are registered automaticall
 
 ```go
 ext := extension.New()
-// Registers: smtp, resend, twilio, fcm, inapp
+// Registers: smtp, resend, twilio, fcm, sealed, inapp
 ```
 
 ### With Herald Directly
@@ -260,6 +318,7 @@ h, err := herald.New(
     herald.WithDriver(&email.ResendDriver{}),
     herald.WithDriver(&sms.TwilioDriver{}),
     herald.WithDriver(&push.FCMDriver{}),
+    herald.WithDriver(&push.SealedDriver{}),
     herald.WithDriver(&inapp.Driver{}),
 )
 ```

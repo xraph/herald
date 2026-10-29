@@ -5,6 +5,8 @@ description: Lightweight SQLite backend using Grove ORM with sqlitedriver.
 
 The SQLite store (`herald/store/sqlite`) provides a lightweight backend for Herald using [Grove ORM](https://github.com/xraph/grove) with `sqlitedriver`. It creates the same 7 tables as the PostgreSQL store but uses SQLite-native types: `TEXT` for JSON data, `INTEGER` for booleans, and `datetime('now')` for timestamp defaults.
 
+This store has no device store in v1.9.0, so it can't hold the devices push fan-out needs. Use the Postgres or memory store for them, or give Herald a store of your own with `herald.WithDeviceStore`, which takes any `device.Store`.
+
 ## Installation
 
 ```bash

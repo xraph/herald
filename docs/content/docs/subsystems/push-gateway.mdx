@@ -1,0 +1,212 @@
+---
+title: Push gateway
+description: Run the sealed push gateway that relays encrypted notifications to FCM and APNs without reading them.
+---
+
+The push gateway is a small HTTP handler that sits between your Herald server and Apple and Google. Your server seals each notification to the device's own key and posts it to the gateway. The gateway adds the platform token and hands the sealed bytes to FCM or APNs. It can't read the title or the body, and your server never sees the device token.
+
+You can run one gateway for many Herald servers, or one for yourself. The package is `github.com/xraph/herald/pushgateway`, and it imports no driver module. You pass drivers in.
+
+## Run a gateway
+
+```go
+package main
+
+import (
+    "log"
+    "net/http"
+    "os"
+
+    "github.com/xraph/herald/driver/push"
+    "github.com/xraph/herald/drivers/apns"
+    "github.com/xraph/herald/pushgateway"
+)
+
+func main() {
+    sealingKey, err := os.ReadFile("/etc/gateway/sealing.key") // 32 random bytes
+    if err != nil {
+        log.Fatal(err)
+    }
+    iosKey, err := os.ReadFile("/etc/gateway/AuthKey_ABC123DEFG.p8")
+    if err != nil {
+        log.Fatal(err)
+    }
+    fcmKey, err := os.ReadFile("/etc/gateway/firebase.json")
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    gw, err := pushgateway.New(pushgateway.Config{
+        SealingKeys: []pushgateway.SealingKey{
+            {ID: "k1", Key: sealingKey},
+        },
+        Android: &pushgateway.Platform{
+            Driver:      &push.FCMDriver{},
+            Credentials: map[string]string{"service_account": string(fcmKey)},
+        },
+        IOS: &pushgateway.Platform{
+            Driver:      &apns.Driver{},
+            Credentials: map[string]string{"private_key": string(iosKey)},
+            Settings: map[string]string{
+                "key_id":    "ABC123DEFG",
+                "team_id":   "TEAM123456",
+                "bundle_id": "com.example.app",
+            },
+        },
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    log.Fatal(http.ListenAndServe(":8080", gw))
+}
+```
+
+Put it behind TLS, at an address like `https://push.example.com`. The Herald sealed driver refuses a plain `http` gateway URL unless the host is `localhost`, `127.0.0.1` or `::1`.
+
+`drivers/apns` is its own module, so run `go get github.com/xraph/herald/drivers/apns@v1.9.0`. It needs Herald v1.9.0 for the push options.
+
+`New` checks the config and returns an error for a bad one: no sealing key, a key that isn't 32 bytes, a duplicate or badly formed key ID (1 to 32 characters of letters, digits, `_` and `-`), no platform at all, a platform with no driver, or credentials the driver's `Validate` rejects. You can leave one platform out. Registrations for it then fail, as the status table below says.
+
+| Config field | Default | What it does |
+|--------------|---------|--------------|
+| `SealingKeys` | none, required | The first key seals new handles. Every key opens them |
+| `Android`, `IOS` | nil | A `Platform` with a `Driver`, its `Credentials` and its `Settings`, laid out the way a Herald provider carries them |
+| `ServerPerSecond` | 50 | Sends a second for each sending server |
+| `HandlePerMinute` | 30 | Sends a minute for each device handle |
+| `Logger` | `slog.Default()` | Where the gateway logs |
+| `Now` | `time.Now` | A clock for tests |
+| `PlaceholderTitle` | `Notification` | The alert iOS shows until the app's extension decrypts the real one |
+| `PlaceholderBody` | `New notification` | Same, for the body |
+
+For iOS the gateway sets the `sandbox` setting on each send from the environment the handle was registered with, so one `IOS` platform serves both production and debug builds.
+
+### Rotate the sealing key
+
+Add the new key first in the list and keep the old one behind it.
+
+```go
+SealingKeys: []pushgateway.SealingKey{
+    {ID: "k2", Key: newKey},
+    {ID: "k1", Key: oldKey},
+},
+```
+
+New handles come out under `k2`, and handles under `k1` still open. When you drop `k1`, every handle sealed under it answers 410, so Herald deletes those devices. The apps register again and get a handle under the current key.
+
+## Wire the Herald server
+
+Create a provider that uses the `sealed` driver. The forge extension registers the driver for you. With Herald as a library, register it yourself with `herald.WithDriver(&push.SealedDriver{})`.
+
+| Key | Goes in | What it is |
+|-----|---------|------------|
+| `signing_key` | Credential | Standard base64 of a 32-byte Ed25519 seed |
+| `gateway_url` | Setting | `https://push.example.com` |
+
+```go
+p := &provider.Provider{
+    Name:        "Sealed push",
+    Channel:     "push",
+    Driver:      "sealed",
+    Credentials: map[string]string{"signing_key": seedBase64},
+    Settings:    map[string]string{"gateway_url": "https://push.example.com"},
+}
+err := h.CreateProvider(ctx, p)
+```
+
+The gateway never sees the seed. It sees the public key, which your app passes along when it registers (below), and from then on the gateway refuses any send for that handle that a different key signed.
+
+## The protocol
+
+Every route takes POST and JSON. Another method gets 405, and an unknown path gets 404. Errors come back as `{"error": "..."}`.
+
+### POST /v1/registrations
+
+The app calls this with its platform token and gets back a handle to give your server.
+
+```json
+{
+  "platform": "ios",
+  "token": "<apns device token>",
+  "apns_env": "production",
+  "server_key": "<base64 of the 32-byte Ed25519 public key of your Herald server>"
+}
+```
+
+`apns_env` is `production` or `sandbox` for `ios` and must be empty for `android`. The token is 1 to 4096 bytes and the body at most 8 KB.
+
+| Status | Body | Meaning |
+|--------|------|---------|
+| 201 | `{"handle": "h1...."}` | Registered |
+| 400 | `{"error": ...}` | Bad JSON, an unknown platform, a bad token or `apns_env`, a `server_key` that isn't 32 bytes of base64, or a platform this gateway doesn't serve |
+
+### Handles
+
+A handle looks like `h1.<key id>.<base64url>`. The last part is a 12-byte nonce followed by an AES-256-GCM seal (with `h1.<key id>` authenticated) of the platform, token, APNs environment, the fingerprint of the server key (the first 32 hex characters of the SHA-256 of the raw public key) and the issue time. Only the gateway can open it. Treat it as an opaque string.
+
+### POST /v1/send
+
+Your server sends this. It's what the Herald sealed driver posts.
+
+```json
+{
+  "handle": "h1.k1....",
+  "sealed": "<standard base64 of the HPKE-sealed envelope>",
+  "key_id": "5a1c0e9b7d3f2a64",
+  "urgency": "time_sensitive",
+  "kind": "show",
+  "collapse_id": "deploy-42",
+  "ttl_seconds": 3600
+}
+```
+
+| Field | Rules |
+|-------|-------|
+| `handle` | Required |
+| `sealed` | Required for `show`, optional for `withdraw`. At most 2608 bytes once decoded |
+| `key_id` | 16 lowercase hex characters, the ID of the device's public key |
+| `urgency` | `passive`, `active`, `time_sensitive` or `critical`. Empty means `active` |
+| `kind` | `show` or `withdraw`. Empty means `show` |
+| `collapse_id` | At most 64 bytes |
+| `ttl_seconds` | 0 to 2419200 (28 days) |
+
+The body is at most 16 KB, and three headers sign it:
+
+| Header | Value |
+|--------|-------|
+| `X-Herald-Key` | Standard base64 of your server's Ed25519 public key |
+| `X-Herald-Timestamp` | Unix seconds when you signed |
+| `X-Herald-Signature` | Standard base64 Ed25519 signature over `<timestamp>.<raw body>` |
+
+The timestamp has to be within 300 seconds of the gateway's clock, either way. The key also has to match the fingerprint inside the handle.
+
+| Status | Meaning |
+|--------|---------|
+| 202 | Handed to FCM or APNs. The body is `{"id": "..."}`, the platform's message ID when it gave one |
+| 400 | A bad body, field or handle |
+| 401 | A missing or wrong signature, a timestamp outside the window, or a key that doesn't match the handle |
+| 410 | The address is gone. The handle was sealed under a key the gateway no longer holds, or FCM or APNs says the token is dead. The Herald driver turns this into `driver.ErrAddressGone` and the device is deleted |
+| 429 | A rate limit. `Retry-After` says how many seconds to wait |
+| 502 | The platform failed, or isn't configured on this gateway. It's deliberately not a 410, since that would make a sender delete a device that is fine |
+
+### What the gateway sends
+
+On Android the gateway sends a data-only FCM message, so the app's service always runs and decrypts. The data holds `sealed`, `kid`, `kind` and `collapse_id`, and a withdrawal leaves `sealed` out. The FCM priority is high for `time_sensitive` and `critical`, and normal otherwise.
+
+On iOS a `show` becomes an alert with the placeholder title and body, `mutable-content` set, and `sealed`, `kid` and `collapse_id` as custom keys. The app's notification service extension opens the envelope and replaces the placeholder. A `withdraw` becomes a silent background push (`content-available`, priority 5) with a `withdraw` key holding the collapse ID, which the app uses to remove the notification.
+
+### Rate limits
+
+Two token buckets apply to every send. Each server key gets `ServerPerSecond` sends a second (50 by default), and each handle gets `HandlePerMinute` a minute (30 by default). The burst is the rate rounded up. The gateway keeps the buckets in memory, so a restart empties them, and idle ones are dropped after ten minutes. If you run several gateway instances behind a load balancer, each one counts for itself.
+
+### What the gateway logs
+
+Each registration and send writes one log line. A send line carries the first 16 characters of the server key fingerprint, the platform, the urgency, the kind, the HTTP status and the latency in milliseconds. A registration line carries the platform and the outcome. Nothing else: no handle, token, sealed bytes, key ID or collapse ID, in a log line or an error.
+
+## How a notification is sealed
+
+The sealed driver builds a small JSON envelope, `{"v":1,"title","body","category","thread","data"}`, and encrypts it to the device's public key with HPKE in base mode: DHKEM(X25519, HKDF-SHA256), HKDF-SHA256 and ChaCha20-Poly1305, with the info string `herald push v1` and empty AAD. The sealed bytes are the 32-byte encapsulated key followed by the ciphertext, sent as standard base64.
+
+The envelope can be at most `push.MaxEnvelopeBytes` (2560) before sealing. A bigger one fails with `push.ErrPayloadTooLarge`. A device with no 32-byte public key fails with `push.ErrMissingPublicKey`.
+
+The key ID is the first 8 bytes of the SHA-256 of the public key as lowercase hex, which `push.KeyID` gives you. Native apps can check their own seal and open code against `driver/push/testdata/sealed_vectors.json` in the Herald repo. Those vectors are fixed, so a client that copies them byte for byte stays compatible.

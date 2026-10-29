@@ -13,7 +13,7 @@ There are twelve Go modules in this repo, and the release workflow tags all of t
 
 The driver modules are apns, cloudflare, discord, mailgun, messagebird, postmark, sendgrid, ses, slack, vonage and webhook. Each one requires the root at a published version and carries `replace github.com/xraph/herald => ../../`, so a local build compiles against your working tree. That replace is intentional. Leave it in.
 
-SMTP, Resend, Twilio, FCM and in-app are different. They live inside the root module under `driver/`, and the Forge extension registers them for you.
+SMTP, Resend, Twilio, FCM, the sealed push driver and in-app are different. They live inside the root module under `driver/`, and the Forge extension registers them for you.
 
 ## Commands
 
@@ -69,11 +69,13 @@ Nothing in CI compiles or tests a driver module. The release workflow is the fir
 | `telemetry.go` | Span and metric names, the label values, and the reasons a send is rejected |
 | `errors.go` | Root sentinels, many re-exported from `store` and `template` |
 | `providers.go`, `routing.go`, `sendpreview.go` | Provider CRUD with validation, routing rule checks, `PreviewSend` |
-| `id/` | TypeID identifiers (`hpvd_`, `htpl_`, `htpv_`, `hmsg_`, `hinb_`, `hprf_`, `hscf_`) |
+| `id/` | TypeID identifiers (`hpvd_`, `htpl_`, `htpv_`, `hmsg_`, `hinb_`, `hprf_`, `hscf_`, `hdev_`) |
 | `provider/`, `template/`, `message/`, `inbox/`, `preference/`, `scope/` | One entity each, plus its own `Store` interface |
 | `template/` | Also the renderer, locale resolution and `guard.go`, which caps what a template may build |
 | `scope/` | Scoped config and the app, org, user resolver |
 | `credential/` | AES-256-GCM encryption of provider credentials (`enc:v1:<keyID>:...`) |
+| `device/` | A user's push devices: `Device`, `QuietHours`, the `Store` interface, and `devicetest`, the conformance suite a device store runs. Memory and Postgres implement it; SQLite and Mongo don't |
+| `pushgateway/` | An HTTP handler that registers device tokens as sealed handles and relays signed, sealed sends to FCM and APNs. It imports no driver module |
 | `store/` | The aggregate `Store` and the shared not-found and duplicate sentinels |
 | `store/memory`, `store/sqlite`, `store/postgres`, `store/mongo` | Backends (the last three take a `*grove.DB`) |
 | `store/storetest/` | The conformance suite every backend runs |

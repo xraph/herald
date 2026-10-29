@@ -5,6 +5,8 @@ description: Document-oriented MongoDB backend using Grove ORM with mongodriver.
 
 The MongoDB store (`herald/store/mongo`) provides a document-oriented backend for Herald using [Grove ORM](https://github.com/xraph/grove) with `mongodriver`. It maps Herald entities to 7 MongoDB collections with compound indexes, uses dual `grove`/`bson` struct tags, and supports upsert via `$setOnInsert`/`$set` for idempotent writes.
 
+This store has no device store in v1.9.0, so it can't hold the devices push fan-out needs. Use the Postgres or memory store for them, or give Herald a store of your own with `herald.WithDeviceStore`, which takes any `device.Store`.
+
 ## Installation
 
 ```bash

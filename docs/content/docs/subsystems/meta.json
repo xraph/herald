@@ -4,10 +4,12 @@
     "providers",
     "templates",
     "delivery",
+    "devices",
     "inbox",
     "preferences",
     "scoped-config",
     "drivers",
+    "push-gateway",
     "observability"
   ]
 }

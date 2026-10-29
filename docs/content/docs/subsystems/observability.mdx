@@ -49,7 +49,7 @@ Without a provider the spans cost next to nothing and go nowhere. Without `WithM
 
 `render template` only exists when the send uses a template (`Template` set and `Body` empty). `herald.driver` and `herald.provider.id` are set once the provider and its driver are known, and `herald.suppressed` only when the user opted out, in which case no driver runs and there are no client spans.
 
-There is one vendor client span per recipient, since each recipient is a separate vendor call. There is no internal span per recipient: the send span carries the counts and the metrics carry the outcomes.
+There is one vendor client span per recipient, since each recipient is a separate vendor call. In a push fan-out to a user's devices, `herald.recipient.count` is the number of devices the push could reach, and each device is one vendor call. The sealed driver's span is named `POST /v1/send`. There is no internal span per recipient: the send span carries the counts and the metrics carry the outcomes.
 
 The attributes that take a fixed set of values:
 
@@ -118,14 +118,14 @@ A span never holds a recipient address, template data, the subject, body or titl
 
 Deliveries are counted per recipient. The duration is how long the driver took to deliver to one recipient, which for an HTTP or SMTP driver is mostly the vendor's time. Its buckets run from 10ms to 30s (0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30), since the HTTP drivers give up at 10 seconds and SMTP at 30. A delivery that failed because the provider's credentials couldn't be decrypted counts as `result="error"` with no duration, because no driver ran.
 
-A rejected send is one that failed before any delivery, so `Send` returned an error (or, for `no_recipients`, a failed result). A suppressed recipient is one who opted out. A failed log write means a message row is missing from the log even though the send went ahead (`SendResult.Logged` is false).
+A rejected send is one that failed before any delivery, so `Send` returned an error (or, for `no_recipients`, a failed result). A suppressed recipient is one who opted out, or a device held back by its quiet hours in a push fan-out. A failed log write means a message row is missing from the log even though the send went ahead (`SendResult.Logged` is false).
 
 Every label takes a value from a fixed list:
 
 | Label | Values |
 |-------|--------|
 | `channel` | `email`, `sms`, `push`, `inapp`, `webhook`, `chat`, `other` |
-| `driver` | the name of a registered driver: `smtp`, `resend`, `twilio`, `fcm`, `inapp`, and `apns`, `cloudflare`, `discord`, `mailgun`, `messagebird`, `postmark`, `sendgrid`, `ses`, `slack`, `vonage`, `webhook` when you register them, or your own driver's `Name()` |
+| `driver` | the name of a registered driver: `smtp`, `resend`, `twilio`, `fcm`, `sealed`, `inapp`, and `apns`, `cloudflare`, `discord`, `mailgun`, `messagebird`, `postmark`, `sendgrid`, `ses`, `slack`, `vonage`, `webhook` when you register them, or your own driver's `Name()` |
 | `result` | `ok`, `error` |
 | `reason` | `template_not_found`, `template_disabled`, `no_locale`, `missing_variable`, `render_failed`, `no_provider`, `provider_not_found`, `invalid_channel`, `driver_not_found`, `no_recipients`, `other` |
 | `op` | `create` (the message row), `record_delivery` (its outcome) |
