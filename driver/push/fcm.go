@@ -8,14 +8,24 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
+
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 
 	"github.com/xraph/herald/driver"
 	"github.com/xraph/herald/message"
 )
 
 // FCMDriver delivers push notifications via Firebase Cloud Messaging HTTP v1 API.
-type FCMDriver struct{}
+//
+// The zero value is ready to use. It caches minted access tokens per service
+// account key, so share one instance rather than creating one per send.
+type FCMDriver struct {
+	mu     sync.Mutex
+	tokens map[string]*oauth2.Token
+}
 
 var _ driver.Driver = (*FCMDriver)(nil)
 
@@ -23,8 +33,14 @@ func (d *FCMDriver) Name() string    { return "fcm" }
 func (d *FCMDriver) Channel() string { return "push" }
 
 func (d *FCMDriver) Validate(credentials, _ map[string]string) error {
+	if sa := credentials["service_account"]; sa != "" {
+		if _, err := google.JWTConfigFromJSON([]byte(sa), fcmScope); err != nil {
+			return fmt.Errorf("fcm: credential 'service_account' is not a valid service account key")
+		}
+		return nil
+	}
 	if credentials["server_key"] == "" && credentials["access_token"] == "" {
-		return fmt.Errorf("fcm: missing required credential 'server_key' or 'access_token'")
+		return fmt.Errorf("fcm: missing required credential 'service_account', 'server_key' or 'access_token'")
 	}
 	return nil
 }
@@ -90,6 +106,17 @@ func (d *FCMDriver) Send(ctx context.Context, msg *driver.OutboundMessage) (*dri
 	projectID := msg.Data["project_id"]
 	accessToken := msg.Data["access_token"]
 	serverKey := msg.Data["server_key"]
+
+	if sa := msg.Data["service_account"]; sa != "" {
+		tok, err := d.serviceAccountToken(ctx, sa)
+		if err != nil {
+			return nil, err
+		}
+		accessToken = tok
+		if projectID == "" {
+			projectID = serviceAccountProject(sa)
+		}
+	}
 
 	var fcmMsg fcmMessage
 	fcmMsg.Message.Token = msg.To

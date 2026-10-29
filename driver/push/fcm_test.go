@@ -93,6 +93,12 @@ func TestFCMValidate(t *testing.T) {
 	if err := d.Validate(map[string]string{"access_token": "t"}, nil); err != nil {
 		t.Errorf("unexpected: %v", err)
 	}
+	if err := d.Validate(map[string]string{"service_account": "not json"}, nil); err == nil {
+		t.Error("expected error for a service_account that is not JSON")
+	}
+	if err := d.Validate(map[string]string{"service_account": serviceAccountJSON(t, "http://127.0.0.1/token", "p")}, nil); err != nil {
+		t.Errorf("valid service account: %v", err)
+	}
 }
 
 func fcmSend(t *testing.T, status int, resp string, opts *driver.PushOptions, data map[string]string) (map[string]any, error) {
