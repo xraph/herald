@@ -60,6 +60,10 @@ Herald can push to a user's devices now, and send a push the gateway in the midd
 
 - New pages for devices and the push gateway. The drivers, delivery, observability and errors pages, the id page, and the Postgres, memory, SQLite and Mongo store pages cover what changed.
 
+### Dependencies
+
+- Moved to forge v1.13.2, grove v1.10.1 (with the Mongo, Postgres and SQLite drivers), chronicle v1.9.1, go-utils v1.5.0 and relay v1.8.1 (the webhook driver). No API changes were needed on our side.
+
 ## v1.8.0
 
 Every send is traced and measured now. In a Forge app you get it with nothing to configure.
