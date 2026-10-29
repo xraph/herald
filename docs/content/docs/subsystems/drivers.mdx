@@ -210,9 +210,9 @@ driver.Channel() // "push"
 
 With a `service_account`, the driver signs a JWT, exchanges it for an access token and caches the token per key. It replaces a cached token five minutes before it expires, so you share one `FCMDriver` instead of making one per send. When `project_id` is empty it reads the key's own `project_id`. A failed mint reports the status code and nothing else, never the key or the client email.
 
-**Push options**: `DataOnly` drops the notification block and sends data alone. `Push.Data` merges into the data and wins over a `data.` setting. When there are options, the driver sets an `android` block: `collapse_key` from `CollapseID`, a `ttl` in whole seconds, and a priority that is `HIGH` for `time_sensitive` and `critical` and `NORMAL` otherwise.
+The push options work like this. `DataOnly` drops the notification block and sends data alone. `Push.Data` merges into the data and wins over a `data.` setting. When there are options, the driver sets an `android` block: `collapse_key` from `CollapseID`, a `ttl` in whole seconds, and a priority that is `HIGH` for `time_sensitive` and `critical` and `NORMAL` otherwise.
 
-**Dead tokens**: An `UNREGISTERED` error, or a bad `message.token` field, comes back as `driver.ErrAddressGone`. A bad field anywhere else in the message is a bug in your payload and stays an ordinary error.
+An `UNREGISTERED` error, or a bad `message.token` field, comes back as `driver.ErrAddressGone`. A bad field anywhere else in the message is a bug in your payload and stays an ordinary error.
 
 ---
 
@@ -236,7 +236,7 @@ h, err := herald.New(
 )
 ```
 
-**Payload**: Herald builds the `aps` dictionary from the message and the push options. The title and body become the alert, with the default sound. Then each option adds its own key:
+Herald builds the `aps` dictionary from the message and the push options. The title and body become the alert, with the default sound. Then each option adds its own key:
 
 | Option | APNs |
 |--------|------|
@@ -251,7 +251,7 @@ h, err := herald.New(
 
 A background push has no title and no text and sets `ContentAvailable`. It goes out with the push type `background`, priority 5, and an `aps` that holds `content-available` and nothing else, which is what Apple requires. A push with nothing to show that isn't a background push returns an error and sends nothing.
 
-**Dead tokens**: A 410, or a 400 with the reason `BadDeviceToken`, comes back as `driver.ErrAddressGone`. Transport errors have the request URL removed, since the URL holds the device token.
+A 410, or a 400 with the reason `BadDeviceToken`, comes back as `driver.ErrAddressGone`. Transport errors have the request URL removed, since the URL holds the device token.
 
 ---
 

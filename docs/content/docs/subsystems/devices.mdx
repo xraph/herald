@@ -72,7 +72,7 @@ for _, dr := range result.Devices {
 }
 ```
 
-A raw push send, one with no template, uses `Subject` as the title. Before v1.9.0 the title was empty.
+Any push whose rendered title is empty, which includes a raw send with no template, uses `Subject` as the title. Before v1.9.0 that title was empty.
 
 Each device gets its own message row, with the device ID as the recipient. The address is never logged. The overall `result.Status` follows these rules:
 
@@ -103,7 +103,7 @@ Two kinds of push ignore quiet hours. A push with `UrgencyCritical` always goes 
 
 ### Dead devices
 
-When a driver returns `driver.ErrAddressGone` (FCM says the token is unregistered, APNs answers 410 or `BadDeviceToken`, the gateway answers 410), Herald deletes that device after recording the failure. You don't need to clean up after it. If the delete itself fails, Herald logs a warning and carries on.
+When a driver returns `driver.ErrAddressGone` (FCM says the token is unregistered, APNs answers 410 or `BadDeviceToken`, the gateway answers 410), Herald deletes that device straight away, then records the failed delivery. You don't need to clean up after it. If the delete itself fails, Herald logs a warning and carries on.
 
 ## Push options
 

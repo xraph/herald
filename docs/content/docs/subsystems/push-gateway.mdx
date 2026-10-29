@@ -139,6 +139,7 @@ The app calls this with its platform token and gets back a handle to give your s
 |--------|------|---------|
 | 201 | `{"handle": "h1...."}` | Registered |
 | 400 | `{"error": ...}` | Bad JSON, an unknown platform, a bad token or `apns_env`, a `server_key` that isn't 32 bytes of base64, or a platform this gateway doesn't serve |
+| 500 | `{"error": "could not issue handle"}` | The gateway couldn't seal the handle |
 
 ### Handles
 

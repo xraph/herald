@@ -7,7 +7,7 @@ Herald can push to a user's devices now, and send a push the gateway in the midd
 ### Before you upgrade
 
 - `drivers/apns` needs herald v1.9.0. It reads the new push options, so upgrade the root along with it.
-- A raw push send (no template) now uses `Subject` as the title. It used to arrive with an empty one, so if you worked around that by putting text in `Body` alone, check how those pushes look.
+- A push whose rendered title is empty, which includes any raw send with no template, now uses `Subject` as the title. It used to arrive with an empty one, so if you worked around that by putting text in `Body` alone, check how those pushes look.
 - The Forge extension registers the `sealed` driver. A provider that names `sealed` works with no setup. If you registered your own driver under that name, rename it.
 - SQLite and Mongo have no device store in this release. Registering devices needs the memory or Postgres store, or a store of your own passed to `herald.WithDeviceStore`. Without one, the device methods return `herald.ErrNoDeviceStore`.
 
