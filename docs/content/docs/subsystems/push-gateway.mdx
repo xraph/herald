@@ -16,6 +16,7 @@ import (
     "log"
     "net/http"
     "os"
+    "time"
 
     "github.com/xraph/herald/driver/push"
     "github.com/xraph/herald/drivers/apns"
@@ -58,7 +59,15 @@ func main() {
         log.Fatal(err)
     }
 
-    log.Fatal(http.ListenAndServe(":8080", gw))
+    srv := &http.Server{
+        Addr:              ":8080",
+        Handler:           gw,
+        ReadHeaderTimeout: 5 * time.Second,
+        ReadTimeout:       10 * time.Second,
+        WriteTimeout:      15 * time.Second,
+        IdleTimeout:       60 * time.Second,
+    }
+    log.Fatal(srv.ListenAndServe())
 }
 ```
 
@@ -73,11 +82,13 @@ Put it behind TLS, at an address like `https://push.example.com`. The Herald sea
 | `SealingKeys` | none, required | The first key seals new handles. Every key opens them |
 | `Android`, `IOS` | nil | A `Platform` with a `Driver`, its `Credentials` and its `Settings`, laid out the way a Herald provider carries them |
 | `ServerPerSecond` | 50 | Sends a second for each sending server |
-| `HandlePerMinute` | 30 | Sends a minute for each device handle |
+| `HandlePerMinute` | 30 | Sends a minute for each device (platform and token) |
 | `Logger` | `slog.Default()` | Where the gateway logs |
 | `Now` | `time.Now` | A clock for tests |
 | `PlaceholderTitle` | `Notification` | The alert iOS shows until the app's extension decrypts the real one |
 | `PlaceholderBody` | `New notification` | Same, for the body |
+
+The two placeholders together can take at most 256 bytes once JSON-encoded, and `New` returns an error for a longer pair. `<`, `>` and `&` count as six bytes each. The cap keeps the biggest sealed show under the 4096 bytes APNs allows.
 
 For iOS the gateway sets the `sandbox` setting on each send from the environment the handle was registered with, so one `IOS` platform serves both production and debug builds.
 
@@ -92,7 +103,7 @@ SealingKeys: []pushgateway.SealingKey{
 },
 ```
 
-New handles come out under `k2`, and handles under `k1` still open. When you drop `k1`, every handle sealed under it answers 410, so Herald deletes those devices. The apps register again and get a handle under the current key.
+New handles come out under `k2`, and handles under `k1` still open. Don't drop `k1` yet. Once you do, every device whose handle was sealed under it answers 410, and every Herald server that sends to it deletes that device. So keep the old key at least as long as your apps take to register again. After that, drop it. The apps that did register get a handle under the current key.
 
 ## Wire the Herald server
 
@@ -133,7 +144,7 @@ The app calls this with its platform token and gets back a handle to give your s
 }
 ```
 
-`apns_env` is `production` or `sandbox` for `ios` and must be empty for `android`. The token is 1 to 4096 bytes and the body at most 8 KB.
+`apns_env` is `production` or `sandbox` for `ios` and must be empty for `android`. The token is 1 to 4096 bytes and the body at most 8 KB. An `ios` token is hex only, and an `android` token can hold letters, digits, `_`, `-` and `:`. Anything else is a 400.
 
 | Status | Body | Meaning |
 |--------|------|---------|
@@ -168,7 +179,7 @@ Your server sends this. It's what the Herald sealed driver posts.
 | `key_id` | 16 lowercase hex characters, the ID of the device's public key |
 | `urgency` | `passive`, `active`, `time_sensitive` or `critical`. Empty means `active` |
 | `kind` | `show` or `withdraw`. Empty means `show` |
-| `collapse_id` | At most 64 bytes |
+| `collapse_id` | At most 64 bytes, and required for `withdraw`, since it names the notification to remove |
 | `ttl_seconds` | 0 to 2419200 (28 days) |
 
 The body is at most 16 KB, and three headers sign it:
@@ -198,7 +209,7 @@ On iOS a `show` becomes an alert with the placeholder title and body, `mutable-c
 
 ### Rate limits
 
-Two token buckets apply to every send. Each server key gets `ServerPerSecond` sends a second (50 by default), and each handle gets `HandlePerMinute` a minute (30 by default). The burst is the rate rounded up. The gateway keeps the buckets in memory, so a restart empties them, and idle ones are dropped after ten minutes. If you run several gateway instances behind a load balancer, each one counts for itself.
+Two token buckets apply to every send. Each server key gets `ServerPerSecond` sends a second (50 by default), and each device gets `HandlePerMinute` a minute (30 by default). A device is its platform plus its token, so an app that registers again and gets a new handle keeps the same budget. The burst is the rate rounded up. The gateway keeps the buckets in memory, so a restart empties them, and idle ones are dropped after ten minutes. If you run several gateway instances behind a load balancer, each one counts for itself.
 
 ### What the gateway logs
 
@@ -208,6 +219,6 @@ Each registration and send writes one log line. A send line carries the first 16
 
 The sealed driver builds a small JSON envelope, `{"v":1,"title","body","category","thread","data"}`, and encrypts it to the device's public key with HPKE in base mode: DHKEM(X25519, HKDF-SHA256), HKDF-SHA256 and ChaCha20-Poly1305, with the info string `herald push v1` and empty AAD. The sealed bytes are the 32-byte encapsulated key followed by the ciphertext, sent as standard base64.
 
-The envelope can be at most `push.MaxEnvelopeBytes` (2560) before sealing. A bigger one fails with `push.ErrPayloadTooLarge`. A device with no 32-byte public key fails with `push.ErrMissingPublicKey`.
+The envelope can be at most `push.MaxEnvelopeBytes` (2560) before sealing. A bigger one fails with `push.ErrPayloadTooLarge`. A device with no 32-byte public key fails with `push.ErrMissingPublicKey`, and a withdraw with no collapse ID fails with `push.ErrMissingCollapseID` before anything is sent.
 
 The key ID is the first 8 bytes of the SHA-256 of the public key as lowercase hex, which `push.KeyID` gives you. Native apps can check their own seal and open code against `driver/push/testdata/sealed_vectors.json` in the Herald repo. Those vectors are fixed, so a client that copies them byte for byte stays compatible.

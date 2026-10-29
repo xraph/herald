@@ -28,7 +28,7 @@ fmt.Println(d.ID) // hdev_...
 
 `SaveDevice` is an upsert. Within one app and user, a device is identified by its public key when it has one and by its address when it doesn't (`device.UniqueKey`). Save the same device again and Herald refreshes it, keeping the stored ID and `CreatedAt`. It sets `Channel` to `push` when you leave it empty, and stamps `UpdatedAt` and `LastSeenAt` on every call. The ID and `CreatedAt` are written back into the struct you passed.
 
-Herald checks the device before it stores it, and a failure wraps `device.ErrInvalidDevice`. It needs an app ID, a user ID, a provider and an address. The channel can only be `push`. A public key, if you give one, is exactly 32 bytes. The time zone has to be an IANA name your system knows, and both quiet hours values have to be `HH:MM` on a 24-hour clock.
+Herald checks the device before it stores it, and a failure wraps `device.ErrInvalidDevice`. It needs an app ID, a user ID, a provider and an address. The channel can only be `push`. A public key, if you give one, is exactly 32 bytes, and a `sealed` device must have one. The time zone has to be an IANA name your system knows (`Local` is refused, since it would mean the server's zone), and both quiet hours values have to be `HH:MM` on a 24-hour clock.
 
 | Field | What it holds |
 |-------|---------------|
@@ -103,7 +103,7 @@ Two kinds of push ignore quiet hours. A push with `UrgencyCritical` always goes 
 
 ### Dead devices
 
-When a driver returns `driver.ErrAddressGone` (FCM says the token is unregistered, APNs answers 410 or `BadDeviceToken`, the gateway answers 410), Herald deletes that device straight away, then records the failed delivery. You don't need to clean up after it. If the delete itself fails, Herald logs a warning and carries on.
+When a driver returns `driver.ErrAddressGone` (FCM says the token is unregistered, APNs answers 410 or `BadDeviceToken`, the gateway answers 410), Herald deletes that device straight away, then records the failed delivery. It re-reads the device first. If the phone registered again while the send was in flight, so the stored address or key no longer matches the one that failed, the device stays and only that delivery counts as failed. You don't need to clean up after it. If the delete itself fails, Herald logs a warning and carries on.
 
 ## Push options
 
