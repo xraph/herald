@@ -10,6 +10,7 @@ package pushgateway
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -26,6 +27,11 @@ const (
 	defaultHandlePerMinute  = 30
 	defaultPlaceholderTitle = "Notification"
 	defaultPlaceholderBody  = "New notification"
+
+	// maxPlaceholderBytes bounds the JSON-encoded placeholder title and body
+	// together. With a 64-byte collapse ID and a max-size sealed envelope it
+	// keeps an iOS show under APNs' 4096-byte payload limit.
+	maxPlaceholderBytes = 256
 )
 
 var keyIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
@@ -50,7 +56,7 @@ type Config struct {
 	Android          *Platform        // FCM; nil: android registrations answer 400
 	IOS              *Platform        // APNs; nil: ios registrations answer 400. The gateway sets setting "sandbox" per send from the handle's apns_env
 	ServerPerSecond  float64          // per server key; 0 means 50; burst = ceil(rate), at least 1
-	HandlePerMinute  float64          // per handle; 0 means 30; burst = ceil(rate), at least 1
+	HandlePerMinute  float64          // per device (platform and token); 0 means 30; burst = ceil(rate), at least 1
 	Logger           *slog.Logger     // nil means slog.Default()
 	Now              func() time.Time // nil means time.Now; addition for tests
 	PlaceholderTitle string           // iOS alert shown until the extension decrypts; "" means "Notification"
@@ -91,6 +97,11 @@ func New(cfg Config) (http.Handler, error) {
 		now:              cfg.Now,
 		placeholderTitle: orString(cfg.PlaceholderTitle, defaultPlaceholderTitle),
 		placeholderBody:  orString(cfg.PlaceholderBody, defaultPlaceholderBody),
+	}
+	if n, err := placeholderBytes(g.placeholderTitle, g.placeholderBody); err != nil {
+		return nil, fmt.Errorf("pushgateway: placeholder: %w", err)
+	} else if n > maxPlaceholderBytes {
+		return nil, fmt.Errorf("pushgateway: placeholder title and body are %d bytes encoded, at most %d", n, maxPlaceholderBytes)
 	}
 	g.serverLimits = newLimiterSet(g.serverPerSecond, g.serverPerSecond)
 	g.handleLimits = newLimiterSet(g.handlePerMinute/60, g.handlePerMinute)
@@ -135,6 +146,20 @@ func New(cfg Config) (http.Handler, error) {
 		}
 	}
 	return g, nil
+}
+
+// placeholderBytes is the size the title and body take in the APNs payload,
+// after JSON escaping (which turns <, > and & into six bytes each).
+func placeholderBytes(title, body string) (int, error) {
+	total := 0
+	for _, v := range []string{title, body} {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			return 0, err
+		}
+		total += len(raw) - 2 // the surrounding quotes
+	}
+	return total, nil
 }
 
 func orDefault(v, def float64) float64 {

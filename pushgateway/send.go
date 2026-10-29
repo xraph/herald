@@ -106,13 +106,16 @@ func (g *gateway) serveSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := g.now()
-	handleSum := sha256.Sum256([]byte(body.Handle))
+	// The per-device bucket is keyed on the platform and token, hashed so the
+	// token never sits in a map key. Keying on the handle text would hand a
+	// device a fresh budget each time it re-registers.
+	deviceSum := sha256.Sum256([]byte(c.P + "\x00" + c.T))
 	for _, b := range []struct {
 		set *limiterSet
 		key string
 	}{
 		{g.serverLimits, fp},
-		{g.handleLimits, hex.EncodeToString(handleSum[:])},
+		{g.handleLimits, hex.EncodeToString(deviceSum[:])},
 	} {
 		if ok, retry := b.set.allow(b.key, now); !ok {
 			w.Header().Set("Retry-After", strconv.Itoa(retry))
@@ -203,6 +206,9 @@ func validateSend(b *push.SendBody) string {
 	}
 	if b.TTLSeconds < 0 || b.TTLSeconds > maxTTLSeconds {
 		return "ttl_seconds must be 0 to 2419200"
+	}
+	if b.Kind == driver.PushKindWithdraw && b.CollapseID == "" {
+		return "collapse_id is required for withdraw"
 	}
 	if len(b.CollapseID) > maxCollapseLen {
 		return "collapse_id must be at most 64 bytes"

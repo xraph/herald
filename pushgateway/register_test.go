@@ -50,7 +50,7 @@ func TestRegisterAndroidReturnsHandle(t *testing.T) {
 func TestRegisterIOS(t *testing.T) {
 	g := testGW(t, nil)
 	pub, _ := serverKeys(7)
-	rec := post(g, "/v1/registrations", registerBody("ios", "apns-tok", "sandbox", pub))
+	rec := post(g, "/v1/registrations", registerBody("ios", "ab01", "sandbox", pub))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("code = %d body = %s", rec.Code, rec.Body)
 	}
@@ -59,7 +59,7 @@ func TestRegisterIOS(t *testing.T) {
 		t.Fatalf("claims = %+v, err = %v", got, err)
 	}
 	for _, env := range []string{"", "staging"} {
-		if rec = post(g, "/v1/registrations", registerBody("ios", "apns-tok", env, pub)); rec.Code != http.StatusBadRequest {
+		if rec = post(g, "/v1/registrations", registerBody("ios", "ab01", env, pub)); rec.Code != http.StatusBadRequest {
 			t.Errorf("env %q: code = %d", env, rec.Code)
 		}
 	}
@@ -76,7 +76,11 @@ func TestRegisterRejects(t *testing.T) {
 		"bad server key":   map[string]string{"platform": "android", "token": token, "server_key": "%%%"},
 		"android env":      registerBody("android", token, "production", pub),
 		"malformed json":   `{"platform": "android", "token": "` + token,
-		"huge body":        bytes.Repeat([]byte("x"), 1<<20),
+		"ios non hex":      registerBody("ios", "not-hex!", "production", pub),
+		"ios path chars":   registerBody("ios", "ab/../cd", "production", pub),
+		"android slash":    registerBody("android", "tok/en", "", pub),
+		"android space":    registerBody("android", "tok en", "", pub),
+		"android newline":  registerBody("android", "tok\nen", "", pub),
 	}
 	g := newTestGateway(t, nil)
 	for name, body := range cases {
@@ -91,6 +95,32 @@ func TestRegisterRejects(t *testing.T) {
 		if strings.Contains(rec.Body.String(), token) {
 			t.Errorf("%s: error echoes the token", name)
 		}
+	}
+}
+
+func TestRegisterAcceptsRealTokenShapes(t *testing.T) {
+	pub, _ := serverKeys(7)
+	g := newTestGateway(t, nil)
+	cases := []struct{ platform, token, env string }{
+		{"ios", "0123456789abcdefABCDEF", "production"},
+		{"android", "dQw4w9WgXcQ:APA91b_Hk-x0Z", ""},
+	}
+	for _, c := range cases {
+		if rec := post(g, "/v1/registrations", registerBody(c.platform, c.token, c.env, pub)); rec.Code != http.StatusCreated {
+			t.Errorf("%s token %q: code = %d %s", c.platform, c.token, rec.Code, rec.Body)
+		}
+	}
+}
+
+func TestRegisterHugeBodyIsTooLarge(t *testing.T) {
+	pub, _ := serverKeys(7)
+	g := testGW(t, nil)
+	android, ios := drivers(g)
+	// Valid JSON, so only the 8 KiB body cap can reject it.
+	rec := post(g, "/v1/registrations", registerBody("android", strings.Repeat("t", 9<<10), "", pub))
+	wantBody(t, rec, http.StatusBadRequest, `{"error":"request body too large"}`)
+	if len(android.got)+len(ios.got) != 0 {
+		t.Fatal("a driver was called")
 	}
 }
 

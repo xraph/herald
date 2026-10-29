@@ -2,6 +2,7 @@ package pushgateway
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/xraph/herald/driver"
@@ -39,5 +40,27 @@ func TestNewValidatesMergedCredentialsAndSettings(t *testing.T) {
 	}
 	if err := build(map[string]string{"team_id": "T1", "bundle_id": "com.example.app"}); err == nil {
 		t.Fatal("New succeeded with key_id missing from both maps")
+	}
+}
+
+func TestNewBoundsPlaceholders(t *testing.T) {
+	build := func(title, body string) error {
+		cfg := testConfig()
+		cfg.PlaceholderTitle, cfg.PlaceholderBody = title, body
+		_, err := New(cfg)
+		return err
+	}
+	if err := build(strings.Repeat("t", 128), strings.Repeat("b", 128)); err != nil {
+		t.Fatalf("256 bytes: %v", err)
+	}
+	if err := build(strings.Repeat("t", 128), strings.Repeat("b", 129)); err == nil {
+		t.Fatal("257 bytes accepted")
+	}
+	// "<" is one byte raw and six once JSON escapes it.
+	if err := build(strings.Repeat("<", 41), strings.Repeat("b", 16)); err == nil {
+		t.Fatal("41 escaped bytes plus 16 (262) accepted")
+	}
+	if err := build(strings.Repeat("<", 40), strings.Repeat("b", 16)); err != nil {
+		t.Fatalf("40 escaped bytes plus 16 (256): %v", err)
 	}
 }

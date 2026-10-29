@@ -119,12 +119,12 @@ func TestSendAndroidWithdraw(t *testing.T) {
 func TestSendIOSShowMapsToAPNs(t *testing.T) {
 	g := testGW(t, nil)
 	_, ios := drivers(g)
-	prod := registerHandle(t, g, "ios", "apns-tok", "production")
+	prod := registerHandle(t, g, "ios", "ab01", "production")
 	body := showBody(prod)
 	body.Urgency = "time_sensitive"
 	wantBody(t, signedSend(t, g, 7, body, testNow.Unix()), 202, `{"id":"apns-msg-1"}`)
 	m := ios.got[0]
-	if _, ok := m.Data["sandbox"]; ok || m.To != "apns-tok" {
+	if _, ok := m.Data["sandbox"]; ok || m.To != "ab01" {
 		t.Fatalf("message = %+v", m)
 	}
 	if m.Title != "Notification" || m.Text != "New notification" {
@@ -139,7 +139,7 @@ func TestSendIOSShowMapsToAPNs(t *testing.T) {
 	}
 
 	before := maps.Clone(g.ios.Settings)
-	sbx := registerHandle(t, g, "ios", "apns-tok2", "sandbox")
+	sbx := registerHandle(t, g, "ios", "ab02", "sandbox")
 	body.Handle = sbx
 	wantBody(t, signedSend(t, g, 7, body, testNow.Unix()), 202, `{"id":"apns-msg-1"}`)
 	if got := ios.got[1].Data["sandbox"]; got != "true" {
@@ -153,7 +153,7 @@ func TestSendIOSShowMapsToAPNs(t *testing.T) {
 func TestSendIOSCustomPlaceholder(t *testing.T) {
 	g := testGW(t, func(c *Config) { c.PlaceholderTitle = "Example" })
 	_, ios := drivers(g)
-	h := registerHandle(t, g, "ios", "apns-tok", "production")
+	h := registerHandle(t, g, "ios", "ab01", "production")
 	signedSend(t, g, 7, showBody(h), testNow.Unix())
 	if ios.got[0].Title != "Example" {
 		t.Fatalf("title = %q", ios.got[0].Title)
@@ -163,7 +163,7 @@ func TestSendIOSCustomPlaceholder(t *testing.T) {
 func TestSendIOSWithdraw(t *testing.T) {
 	g := testGW(t, nil)
 	_, ios := drivers(g)
-	h := registerHandle(t, g, "ios", "apns-tok", "production")
+	h := registerHandle(t, g, "ios", "ab01", "production")
 	body := push.SendBody{Handle: h, KeyID: testKID, Kind: "withdraw", CollapseID: testCollapse, Urgency: "critical"}
 	wantBody(t, signedSend(t, g, 7, body, testNow.Unix()), 202, `{"id":"apns-msg-1"}`)
 	m := ios.got[0]
@@ -284,6 +284,7 @@ func TestSendRejectsMalformed(t *testing.T) {
 		{name: "sealed too big", mutate: func(b *push.SendBody) { b.Sealed = b64(make([]byte, 2609)) }},
 		{name: "ttl negative", mutate: func(b *push.SendBody) { b.TTLSeconds = -1 }},
 		{name: "ttl too big", mutate: func(b *push.SendBody) { b.TTLSeconds = 2419201 }},
+		{name: "withdraw without collapse id", mutate: func(b *push.SendBody) { b.Kind, b.Sealed, b.CollapseID = "withdraw", "", "" }},
 		{name: "collapse long", mutate: func(b *push.SendBody) { b.CollapseID = strings.Repeat("a", 65) }},
 		{name: "key id", mutate: func(b *push.SendBody) { b.KeyID = "XYZ" }},
 		{name: "tampered handle", mutate: func(b *push.SendBody) { b.Handle = b.Handle[:len(b.Handle)-2] + "AA" }},
@@ -368,7 +369,7 @@ func TestSendNeverLogsSecrets(t *testing.T) {
 
 func TestSendPlatformOffIs502(t *testing.T) {
 	full := testGW(t, nil)
-	h := registerHandle(t, full, "ios", "apns-tok", "production")
+	h := registerHandle(t, full, "ios", "ab01", "production")
 	g := testGW(t, func(c *Config) { c.IOS = nil })
 	android, _ := g.android.Driver.(*fakeDriver)
 	wantBody(t, signedSend(t, g, 7, showBody(h), testNow.Unix()), 502, `{"error":"delivery failed"}`)

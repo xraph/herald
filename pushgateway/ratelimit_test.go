@@ -2,6 +2,7 @@ package pushgateway
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -57,6 +58,39 @@ func TestHandleRateLimit(t *testing.T) {
 	}
 	if rec := signedSend(t, g, 7, showBody(b), testNow.Unix()); rec.Code != http.StatusAccepted {
 		t.Fatalf("handle B: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestHandleRateLimitFollowsTheDeviceNotTheHandle(t *testing.T) {
+	g := newTestGateway(t, func(c *Config) {
+		c.HandlePerMinute = 2
+		c.ServerPerSecond = 100
+	})
+	gw, _ := g.(*gateway)
+	// Two handles for one token: the same device re-registering.
+	first := registerHandle(t, gw, "android", "tok-a", "")
+	gw.now = func() time.Time { return testNow.Add(time.Second) }
+	second := registerHandle(t, gw, "android", "tok-a", "")
+	if first == second {
+		t.Fatal("expected two different handles")
+	}
+	gw.now = func() time.Time { return testNow }
+	for i, h := range []string{first, second} {
+		if rec := signedSend(t, g, 7, showBody(h), testNow.Unix()); rec.Code != http.StatusAccepted {
+			t.Fatalf("send %d: %d %s", i, rec.Code, rec.Body)
+		}
+	}
+	if rec := signedSend(t, g, 7, showBody(first), testNow.Unix()); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("third send on the same device: %d, want 429", rec.Code)
+	}
+	// The same token on the other platform is a different device.
+	if rec := signedSend(t, g, 7, showBody(registerHandle(t, gw, "ios", "abcd", "production")), testNow.Unix()); rec.Code != http.StatusAccepted {
+		t.Fatalf("other device: %d", rec.Code)
+	}
+	for k := range gw.handleLimits.m {
+		if strings.Contains(k, "tok-a") || strings.Contains(k, "h1.") {
+			t.Fatalf("limiter key %q carries the token or handle", k)
+		}
 	}
 }
 

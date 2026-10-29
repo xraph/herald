@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"regexp"
 )
 
 const (
@@ -16,6 +17,12 @@ const (
 
 	envProduction = "production"
 	envSandbox    = "sandbox"
+)
+
+var (
+	// iOS tokens are hex. FCM tokens use letters, digits, "_", "-" and ":".
+	iosTokenPattern     = regexp.MustCompile(`^[0-9a-fA-F]+$`)
+	androidTokenPattern = regexp.MustCompile(`^[A-Za-z0-9_:-]+$`)
 )
 
 type registrationRequest struct {
@@ -69,6 +76,11 @@ func (g *gateway) serveRegistration(w http.ResponseWriter, r *http.Request) {
 	platform = req.Platform
 	if n := len(req.Token); n == 0 || n > maxTokenBytes {
 		fail(http.StatusBadRequest, "token must be 1 to 4096 bytes")
+		return
+	}
+	if (platform == platformIOS && !iosTokenPattern.MatchString(req.Token)) ||
+		(platform == platformAndroid && !androidTokenPattern.MatchString(req.Token)) {
+		fail(http.StatusBadRequest, "token has characters a "+platform+" token never uses")
 		return
 	}
 	switch {
