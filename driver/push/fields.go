@@ -16,3 +16,13 @@ func (d *FCMDriver) Fields() []driver.Field {
 		{Key: "base_url", Label: "API base URL", Placement: driver.PlacementSetting},
 	}
 }
+
+var _ driver.Describer = (*SealedDriver)(nil)
+
+// Fields describes what the sealed gateway driver reads.
+func (d *SealedDriver) Fields() []driver.Field {
+	return []driver.Field{
+		{Key: "signing_key", Label: "Signing key", Required: true, Help: "Base64 Ed25519 seed, 32 bytes. The gateway sees only its public key.", Secret: true, Placement: driver.PlacementCredential},
+		{Key: "gateway_url", Label: "Gateway URL", Required: true, Placement: driver.PlacementSetting},
+	}
+}
