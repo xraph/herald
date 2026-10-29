@@ -136,7 +136,7 @@ func newSendMetrics(m gometrics.Metrics) *sendMetrics {
 			"Time one driver took to deliver to one recipient.",
 			deliveryBuckets, "channel", "driver", "result"),
 		suppressed: metricsvec.NewCounterVec(m, metricMessagesSuppressed,
-			"Recipients skipped because the user opted out, by channel.",
+			"Recipients skipped because the user opted out or the device was in quiet hours, by channel.",
 			"channel"),
 		rejected: metricsvec.NewCounterVec(m, metricSendsRejected,
 			"Sends that failed before any delivery, by channel and reason.",

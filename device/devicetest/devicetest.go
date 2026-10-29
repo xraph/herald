@@ -60,10 +60,10 @@ func mustSave(t *testing.T, s device.Store, d *device.Device) {
 	}
 }
 
-func mustList(t *testing.T, s device.Store, app, user string) []*device.Device {
+func mustList(t *testing.T, s device.Store, user string) []*device.Device {
 	t.Helper()
 
-	got, err := s.ListDevices(context.Background(), app, user)
+	got, err := s.ListDevices(context.Background(), "app_a", user)
 	if err != nil {
 		t.Fatalf("ListDevices: %v", err)
 	}
@@ -92,7 +92,7 @@ func upsertByPublicKey(t *testing.T, s device.Store) {
 	second.Name = "Pixel 9"
 	mustSave(t, s, second)
 
-	got := mustList(t, s, "app_a", "u1")
+	got := mustList(t, s, "u1")
 	if len(got) != 1 {
 		t.Fatalf("rows = %d, want 1", len(got))
 	}
@@ -121,7 +121,7 @@ func upsertOverwritesClearedFields(t *testing.T, s device.Store) {
 
 	mustSave(t, s, sealed("u1", key32(1), "h1.a"))
 
-	got := mustList(t, s, "app_a", "u1")
+	got := mustList(t, s, "u1")
 	if len(got) != 1 {
 		t.Fatalf("rows = %d, want 1", len(got))
 	}
@@ -147,7 +147,7 @@ func upsertByAddressWithoutKey(t *testing.T, s device.Store) {
 	mustSave(t, s, sealed("u1", nil, "tok-1"))
 	mustSave(t, s, sealed("u1", nil, "tok-1"))
 
-	if got := mustList(t, s, "app_a", "u1"); len(got) != 1 {
+	if got := mustList(t, s, "u1"); len(got) != 1 {
 		t.Fatalf("rows = %d, want 1", len(got))
 	}
 }
@@ -156,11 +156,11 @@ func usersAreSeparate(t *testing.T, s device.Store) {
 	mustSave(t, s, sealed("u1", key32(1), "h1.a"))
 	mustSave(t, s, sealed("u2", key32(1), "h1.a"))
 
-	if n := len(mustList(t, s, "app_a", "u1")); n != 1 {
+	if n := len(mustList(t, s, "u1")); n != 1 {
 		t.Errorf("u1 rows = %d, want 1", n)
 	}
 
-	if n := len(mustList(t, s, "app_a", "u2")); n != 1 {
+	if n := len(mustList(t, s, "u2")); n != 1 {
 		t.Errorf("u2 rows = %d, want 1", n)
 	}
 }
@@ -232,7 +232,7 @@ func listScopedAndOrdered(t *testing.T, s device.Store) {
 
 	mustSave(t, s, sealed("u2", key32(9), "h1.other"))
 
-	got := mustList(t, s, "app_a", "u1")
+	got := mustList(t, s, "u1")
 	if len(got) != len(want) {
 		t.Fatalf("rows = %d, want %d", len(got), len(want))
 	}
@@ -255,11 +255,11 @@ func deleteUserDevices(t *testing.T, s device.Store) {
 		t.Fatalf("DeleteUserDevices: %v", err)
 	}
 
-	if n := len(mustList(t, s, "app_a", "u1")); n != 0 {
+	if n := len(mustList(t, s, "u1")); n != 0 {
 		t.Errorf("u1 rows = %d, want 0", n)
 	}
 
-	if n := len(mustList(t, s, "app_a", "u2")); n != 1 {
+	if n := len(mustList(t, s, "u2")); n != 1 {
 		t.Errorf("u2 rows = %d, want 1", n)
 	}
 
@@ -294,7 +294,7 @@ func concurrentSaveIsOneRow(t *testing.T, s device.Store) {
 		}
 	}
 
-	if n := len(mustList(t, s, "app_a", "u1")); n != 1 {
+	if n := len(mustList(t, s, "u1")); n != 1 {
 		t.Fatalf("rows = %d, want 1", n)
 	}
 }
@@ -305,12 +305,12 @@ func readsAreCopies(t *testing.T, s device.Store) {
 	d.QuietHours = &device.QuietHours{Start: "22:00", End: "07:00"}
 	mustSave(t, s, d)
 
-	first := mustList(t, s, "app_a", "u1")[0]
+	first := mustList(t, s, "u1")[0]
 	first.Settings["k"] = "changed"
 	first.PublicKey[0] = 0xff
 	first.QuietHours.Start = "01:00"
 
-	second := mustList(t, s, "app_a", "u1")[0]
+	second := mustList(t, s, "u1")[0]
 	if second.Settings["k"] != "v" {
 		t.Errorf("Settings leaked a mutation: %v", second.Settings)
 	}

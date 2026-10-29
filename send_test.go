@@ -27,6 +27,7 @@ type recordingDriver struct {
 	name, channel string
 	vendorID      string
 	err           error
+	errByAddr     map[string]error // per-recipient errors, checked before err
 	sent          []*driver.OutboundMessage
 }
 
@@ -37,6 +38,9 @@ func (d *recordingDriver) Send(_ context.Context, m *driver.OutboundMessage) (*d
 	c := *m
 	c.Data = maps.Clone(m.Data)
 	d.sent = append(d.sent, &c)
+	if e := d.errByAddr[m.To]; e != nil {
+		return nil, e
+	}
 	if d.err != nil {
 		return nil, d.err
 	}

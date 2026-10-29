@@ -115,7 +115,7 @@ func TestFCMServiceAccountCacheIsPerKey(t *testing.T) {
 	tok, hits := tokenServer(t, 3600, http.StatusOK)
 	fcm := drivertest.NewServer(t, http.StatusOK, `{"name":"n"}`)
 	d := &push.FCMDriver{}
-	var bearers []string
+	bearers := make([]string, 0, 2)
 	for range 2 {
 		sa := serviceAccountJSON(t, tok.URL, "proj-1")
 		if err := saSend(t, d, fcm, map[string]string{"service_account": sa}); err != nil {
