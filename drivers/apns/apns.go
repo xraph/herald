@@ -189,7 +189,7 @@ func (d *Driver) Send(ctx context.Context, msg *driver.OutboundMessage) (*driver
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/3/device/%s", host, deviceToken), bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/3/device/%s", host, url.PathEscape(deviceToken)), bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("apns: create request: %w", scrubURL(err))
 	}

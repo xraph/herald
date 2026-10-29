@@ -288,12 +288,15 @@ func TestAPNSTransportErrorHidesToken(t *testing.T) {
 
 func TestAPNSMaxSealedPayloadFits(t *testing.T) {
 	srv, rec := newRecorder(t, http.StatusOK, "")
+	// The worst case the gateway can build: a max-size sealed show (2560 bytes
+	// of envelope plus 48 of seal, 3480 base64 characters), the longest
+	// placeholders its 256-byte budget allows, and a 64-byte collapse ID.
 	msg := &driver.OutboundMessage{
-		Title: strings.Repeat("T", 32), Text: "New notification",
+		Title: strings.Repeat("T", 128), Text: strings.Repeat("B", 128),
 		Push: &driver.PushOptions{
-			Urgency: driver.UrgencyCritical, MutableContent: true, CollapseID: strings.Repeat("b", 16),
+			Urgency: driver.UrgencyCritical, MutableContent: true, CollapseID: strings.Repeat("b", 64),
 			Data: map[string]string{
-				"sealed": strings.Repeat("A", 3480), "kid": strings.Repeat("a", 16), "collapse_id": strings.Repeat("b", 16),
+				"sealed": strings.Repeat("A", 3480), "kid": strings.Repeat("a", 16), "collapse_id": strings.Repeat("b", 64),
 			},
 		},
 	}
@@ -302,6 +305,24 @@ func TestAPNSMaxSealedPayloadFits(t *testing.T) {
 	}
 	if len(rec.body) > 4096 {
 		t.Errorf("body is %d bytes, over 4096", len(rec.body))
+	}
+}
+
+func TestAPNSEscapesTheDeviceTokenInThePath(t *testing.T) {
+	var uri string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		uri = r.RequestURI
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	msg := &driver.OutboundMessage{To: "ab/../cd?x=1#f", Title: "Hi", Data: map[string]string{
+		"key_id": "K1", "team_id": "T1", "bundle_id": "b", "private_key": testKeyPEM(t), "base_url": srv.URL,
+	}}
+	if _, err := (&apns.Driver{}).Send(context.Background(), msg); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if want := "/3/device/ab%2F..%2Fcd%3Fx=1%23f"; uri != want {
+		t.Errorf("request URI = %q, want %q", uri, want)
 	}
 }
 
