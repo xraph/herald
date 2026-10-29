@@ -108,6 +108,9 @@ func (d *SealedDriver) Send(ctx context.Context, msg *driver.OutboundMessage) (*
 	if msg.Push != nil && msg.Push.TTL > 0 {
 		body.TTLSeconds = int64(msg.Push.TTL / time.Second)
 	}
+	if body.Kind == driver.PushKindWithdraw && body.CollapseID == "" {
+		return nil, ErrMissingCollapseID
+	}
 	if body.Kind != driver.PushKindWithdraw {
 		env := Envelope{Title: msg.Title, Body: msg.Text}
 		if msg.Push != nil {

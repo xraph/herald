@@ -144,6 +144,22 @@ func TestSealedWithdrawCarriesNoSeal(t *testing.T) {
 	}
 }
 
+func TestSealedWithdrawNeedsACollapseID(t *testing.T) {
+	srv := drivertest.NewServer(t, 202, `{"id":"gw-1"}`)
+	dev := sealedDevice(t)
+	for name, opts := range map[string]*driver.PushOptions{
+		"empty": {Kind: driver.PushKindWithdraw},
+	} {
+		msg := &driver.OutboundMessage{To: sealedHandle, Data: sealedData(srv.URL), PublicKey: dev.PublicKey().Bytes(), Push: opts}
+		if _, err := sealedDriver().Send(t.Context(), msg); !errors.Is(err, push.ErrMissingCollapseID) {
+			t.Errorf("%s: err = %v, want ErrMissingCollapseID", name, err)
+		}
+	}
+	if srv.Captured.Method != "" {
+		t.Error("the gateway was called")
+	}
+}
+
 func TestSealedRefusesOversizedEnvelope(t *testing.T) {
 	srv := drivertest.NewServer(t, 202, `{"id":"gw-1"}`)
 	dev := sealedDevice(t)

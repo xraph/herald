@@ -34,6 +34,9 @@ type Envelope struct {
 var (
 	// ErrPayloadTooLarge reports an envelope over MaxEnvelopeBytes.
 	ErrPayloadTooLarge = errors.New("herald: push payload too large")
+	// ErrMissingCollapseID reports a withdraw with no collapse ID: a withdraw
+	// names the notification to remove by that ID.
+	ErrMissingCollapseID = errors.New("herald: push withdraw needs a collapse id")
 	// ErrMissingPublicKey reports a device without a usable X25519 public key.
 	ErrMissingPublicKey = errors.New("herald: push device has no public key")
 )
