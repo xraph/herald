@@ -10,9 +10,9 @@ var ErrNotFound = errors.New("herald: device not found")
 
 // Store persists devices.
 type Store interface {
-	// SaveDevice upserts on (AppID, UniqueKey, UserID). An insert assigns ID and
-	// CreatedAt. A conflict overwrites every other field, keeps the stored ID and
-	// CreatedAt, and writes both back into d.
+	// SaveDevice upserts on (AppID, UserID, UniqueKey). An insert assigns ID and
+	// CreatedAt. A conflict overwrites every other field but keeps the stored ID
+	// and CreatedAt. Both are written back into d. The store may set UpdatedAt.
 	SaveDevice(ctx context.Context, d *Device) error
 	// GetDevice returns ErrNotFound for a missing device or another app's device.
 	GetDevice(ctx context.Context, appID, id string) (*Device, error)

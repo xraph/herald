@@ -26,6 +26,7 @@ func Run(t *testing.T, open func(t *testing.T) device.Store) {
 	}{
 		{"SaveAssignsIDAndCreatedAt", saveAssignsIDAndCreatedAt},
 		{"UpsertByPublicKey", upsertByPublicKey},
+		{"UpsertOverwritesClearedFields", upsertOverwritesClearedFields},
 		{"UpsertByAddressWithoutKey", upsertByAddressWithoutKey},
 		{"UsersAreSeparate", usersAreSeparate},
 		{"RoundTripsEveryField", roundTripsEveryField},
@@ -109,6 +110,39 @@ func upsertByPublicKey(t *testing.T, s device.Store) {
 	}
 }
 
+func upsertOverwritesClearedFields(t *testing.T, s device.Store) {
+	first := sealed("u1", key32(1), "h1.a")
+	first.Name = "Pixel 9"
+	first.Locale = "en-GB"
+	first.TimeZone = "Europe/London"
+	first.QuietHours = &device.QuietHours{Start: "22:00", End: "07:00"}
+	first.Settings = map[string]string{"push.live": "false"}
+	mustSave(t, s, first)
+
+	mustSave(t, s, sealed("u1", key32(1), "h1.a"))
+
+	got := mustList(t, s, "app_a", "u1")
+	if len(got) != 1 {
+		t.Fatalf("rows = %d, want 1", len(got))
+	}
+
+	if got[0].ID != first.ID {
+		t.Errorf("ID = %q, want %q", got[0].ID, first.ID)
+	}
+
+	if got[0].Name != "" || got[0].Locale != "" || got[0].TimeZone != "" {
+		t.Errorf("strings not cleared: %+v", got[0])
+	}
+
+	if got[0].QuietHours != nil {
+		t.Errorf("QuietHours = %+v, want nil", got[0].QuietHours)
+	}
+
+	if len(got[0].Settings) != 0 {
+		t.Errorf("Settings = %v, want empty", got[0].Settings)
+	}
+}
+
 func upsertByAddressWithoutKey(t *testing.T, s device.Store) {
 	mustSave(t, s, sealed("u1", nil, "tok-1"))
 	mustSave(t, s, sealed("u1", nil, "tok-1"))
@@ -147,19 +181,23 @@ func roundTripsEveryField(t *testing.T, s device.Store) {
 		t.Fatalf("GetDevice: %v", err)
 	}
 
-	// Backends store timestamps at microsecond precision, so compare those
-	// fields by instant and the rest structurally.
+	// Backends differ in timestamp precision, so CreatedAt and LastSeenAt are
+	// compared within a millisecond. UpdatedAt may be set by the store on save,
+	// so it only has to be set and not precede CreatedAt.
 	for _, p := range []struct {
 		name      string
 		got, want time.Time
 	}{
 		{"LastSeenAt", got.LastSeenAt, d.LastSeenAt},
 		{"CreatedAt", got.CreatedAt, d.CreatedAt},
-		{"UpdatedAt", got.UpdatedAt, d.UpdatedAt},
 	} {
-		if !p.got.Equal(p.want) {
+		if p.got.Sub(p.want).Abs() >= time.Millisecond {
 			t.Errorf("%s = %v, want %v", p.name, p.got, p.want)
 		}
+	}
+
+	if got.UpdatedAt.IsZero() || got.UpdatedAt.Before(got.CreatedAt) {
+		t.Errorf("UpdatedAt = %v, want set and not before CreatedAt %v", got.UpdatedAt, got.CreatedAt)
 	}
 
 	got.LastSeenAt, got.CreatedAt, got.UpdatedAt = d.LastSeenAt, d.CreatedAt, d.UpdatedAt
