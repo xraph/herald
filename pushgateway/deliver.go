@@ -9,13 +9,20 @@ import (
 	"github.com/xraph/herald/driver/push"
 )
 
+// merged returns a fresh map of the platform's credentials with its settings
+// laid over them, the way Herald hands a provider's keys to a driver.
+func (p *Platform) merged() map[string]string {
+	data := make(map[string]string, len(p.Credentials)+len(p.Settings)+1)
+	maps.Copy(data, p.Credentials)
+	maps.Copy(data, p.Settings)
+	return data
+}
+
 // driverData returns a fresh map for one send: the platform's credentials,
 // then its settings (settings win), with the apns sandbox flag set from the
 // handle. The platform's own maps are never modified.
 func driverData(p *Platform, c claims) map[string]string {
-	data := make(map[string]string, len(p.Credentials)+len(p.Settings)+1)
-	maps.Copy(data, p.Credentials)
-	maps.Copy(data, p.Settings)
+	data := p.merged()
 	if c.P == platformIOS {
 		switch c.E {
 		case envSandbox:

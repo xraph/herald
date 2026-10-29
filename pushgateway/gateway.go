@@ -130,7 +130,7 @@ func New(cfg Config) (http.Handler, error) {
 		if p.Driver == nil {
 			return nil, fmt.Errorf("pushgateway: %s platform has no driver", name)
 		}
-		if err := p.Driver.Validate(p.Credentials, p.Settings); err != nil {
+		if err := p.Driver.Validate(p.merged(), p.Settings); err != nil {
 			return nil, fmt.Errorf("pushgateway: %s platform: %w", name, err)
 		}
 	}
