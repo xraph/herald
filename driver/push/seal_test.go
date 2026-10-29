@@ -109,7 +109,8 @@ func TestMarshalEnvelopeLimit(t *testing.T) {
 	if len(b) != MaxEnvelopeBytes {
 		t.Fatalf("len = %d", len(b))
 	}
-	if _, err := MarshalEnvelope(padded(t, MaxEnvelopeBytes+1)); !errors.Is(err, ErrPayloadTooLarge) {
+	_, err = MarshalEnvelope(padded(t, MaxEnvelopeBytes+1))
+	if !errors.Is(err, ErrPayloadTooLarge) {
 		t.Fatalf("err = %v", err)
 	}
 	b, err = MarshalEnvelope(Envelope{V: 0, Title: "t", Body: "b"})
@@ -148,16 +149,16 @@ func writeVectors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	max, err := MarshalEnvelope(padded(t, MaxEnvelopeBytes))
+	maxed, err := MarshalEnvelope(padded(t, MaxEnvelopeBytes))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var out []vector
-	for _, p := range [][]byte{approval, unicode, max} {
+	out := make([]vector, 0, 3)
+	for _, p := range [][]byte{approval, unicode, maxed} {
 		priv, pub := newKeyPair(t)
-		sealed, err := Seal(pub, p)
-		if err != nil {
-			t.Fatal(err)
+		sealed, sealErr := Seal(pub, p)
+		if sealErr != nil {
+			t.Fatal(sealErr)
 		}
 		out = append(out, vector{
 			PrivateKey: base64.StdEncoding.EncodeToString(priv),
