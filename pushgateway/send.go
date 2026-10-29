@@ -108,7 +108,8 @@ func (g *gateway) serveSend(w http.ResponseWriter, r *http.Request) {
 
 	p := g.platform(c.P)
 	if p == nil {
-		fail(http.StatusGone, "address gone")
+		// Not 410: that would make the sender delete the device for good.
+		fail(http.StatusBadGateway, "delivery failed")
 		return
 	}
 	result, err := g.deliver(r.Context(), p, c, &body, urgency, kind)

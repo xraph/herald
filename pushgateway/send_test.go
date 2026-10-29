@@ -365,3 +365,14 @@ func TestSendNeverLogsSecrets(t *testing.T) {
 		}
 	}
 }
+
+func TestSendPlatformOffIs502(t *testing.T) {
+	full := testGW(t, nil)
+	h := registerHandle(t, full, "ios", "apns-tok", "production")
+	g := testGW(t, func(c *Config) { c.IOS = nil })
+	android, _ := g.android.Driver.(*fakeDriver)
+	wantBody(t, signedSend(t, g, 7, showBody(h), testNow.Unix()), 502, `{"error":"delivery failed"}`)
+	if len(android.got) != 0 {
+		t.Fatal("driver was called")
+	}
+}
