@@ -10,9 +10,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"sync"
 	"time"
 
@@ -50,19 +53,101 @@ func (d *Driver) Validate(credentials, _ map[string]string) error {
 	return nil
 }
 
-type apnsPayload struct {
-	Aps apnsAps `json:"aps"`
-}
-
-type apnsAps struct {
-	Alert apnsAlert `json:"alert"`
-	Sound string    `json:"sound,omitempty"`
-	Badge *int      `json:"badge,omitempty"`
-}
-
 type apnsAlert struct {
 	Title string `json:"title"`
 	Body  string `json:"body"`
+}
+
+// criticalSound is the sound dictionary APNs needs for a critical alert.
+type criticalSound struct {
+	Critical int    `json:"critical"`
+	Name     string `json:"name"`
+	Volume   int    `json:"volume"`
+}
+
+// interruptionLevels maps a Herald urgency to the APNs interruption-level value.
+var interruptionLevels = map[driver.Urgency]string{
+	driver.UrgencyPassive:       "passive",
+	driver.UrgencyActive:        "active",
+	driver.UrgencyTimeSensitive: "time-sensitive",
+	driver.UrgencyCritical:      "critical",
+}
+
+// buildPayload returns the request body, the apns-push-type and the
+// apns-priority (empty when the old behaviour sends none).
+func buildPayload(msg *driver.OutboundMessage) (body []byte, pushType, priority string, err error) {
+	opts := msg.Push
+	hasAlert := opts == nil || msg.Title != "" || msg.Text != ""
+	background := !hasAlert && opts.ContentAvailable
+
+	aps := map[string]any{}
+	if hasAlert {
+		aps["alert"] = apnsAlert{Title: msg.Title, Body: msg.Text}
+		aps["sound"] = "default"
+	}
+	pushType = "alert"
+	if background {
+		pushType = "background"
+	}
+
+	top := map[string]any{}
+	if opts != nil {
+		if level, ok := interruptionLevels[opts.Urgency]; ok {
+			aps["interruption-level"] = level
+		}
+		if opts.Urgency == driver.UrgencyCritical && hasAlert {
+			aps["sound"] = criticalSound{Critical: 1, Name: "default", Volume: 1}
+		}
+		if opts.MutableContent {
+			aps["mutable-content"] = 1
+		}
+		if opts.ContentAvailable {
+			aps["content-available"] = 1
+		}
+		if opts.Category != "" {
+			aps["category"] = opts.Category
+		}
+		if opts.ThreadID != "" {
+			aps["thread-id"] = opts.ThreadID
+		}
+		for k, v := range opts.Data {
+			if k != "aps" {
+				top[k] = v
+			}
+		}
+		priority = "10"
+		if opts.Urgency == driver.UrgencyPassive || background {
+			priority = "5"
+		}
+	}
+	top["aps"] = aps
+
+	body, err = json.Marshal(top)
+	return body, pushType, priority, err
+}
+
+// scrubURL drops the request URL a *url.Error carries. The URL holds the
+// device token, which must never reach an error message.
+func scrubURL(err error) error {
+	var uerr *url.Error
+	if errors.As(err, &uerr) {
+		return uerr.Err
+	}
+	return err
+}
+
+// addressGone reports whether APNs says the device token is dead.
+func addressGone(status int, respBody []byte) bool {
+	if status == http.StatusGone {
+		return true
+	}
+	if status != http.StatusBadRequest {
+		return false
+	}
+	var r struct {
+		Reason string `json:"reason"`
+	}
+	return json.Unmarshal(respBody, &r) == nil && r.Reason == "BadDeviceToken"
 }
 
 func (d *Driver) Send(ctx context.Context, msg *driver.OutboundMessage) (*driver.DeliveryResult, error) {
@@ -86,40 +171,43 @@ func (d *Driver) Send(ctx context.Context, msg *driver.OutboundMessage) (*driver
 
 	host := resolveHost(msg.Data["base_url"], sandbox)
 
-	payload := apnsPayload{
-		Aps: apnsAps{
-			Alert: apnsAlert{
-				Title: msg.Title,
-				Body:  msg.Text,
-			},
-			Sound: "default",
-		},
-	}
-
-	body, err := json.Marshal(payload)
+	body, pushType, priority, err := buildPayload(msg)
 	if err != nil {
 		return nil, fmt.Errorf("apns: marshal payload: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/3/device/%s", host, deviceToken)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/3/device/%s", host, deviceToken), bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("apns: create request: %w", err)
+		return nil, fmt.Errorf("apns: create request: %w", scrubURL(err))
 	}
 
 	req.Header.Set("Authorization", "bearer "+token)
 	req.Header.Set("apns-topic", bundleID)
-	req.Header.Set("apns-push-type", "alert")
+	req.Header.Set("apns-push-type", pushType)
+	if priority != "" {
+		req.Header.Set("apns-priority", priority)
+	}
+	if p := msg.Push; p != nil {
+		if p.TTL > 0 {
+			req.Header.Set("apns-expiration", strconv.FormatInt(time.Now().Add(p.TTL).Unix(), 10))
+		}
+		if p.CollapseID != "" {
+			req.Header.Set("apns-collapse-id", p.CollapseID)
+		}
+	}
 
 	httpClient := driver.HTTPClient(10*time.Second, driver.Endpoint{Driver: "apns", URLTemplate: "/3/device/{device_token}"})
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("apns: send request: %w", err)
+		return nil, fmt.Errorf("apns: send request: %w", scrubURL(err))
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024)) //nolint:errcheck // best-effort error body read
+		if addressGone(resp.StatusCode, respBody) {
+			return nil, fmt.Errorf("apns: API error %d: %s: %w", resp.StatusCode, string(respBody), driver.ErrAddressGone)
+		}
 		return nil, fmt.Errorf("apns: API error %d: %s", resp.StatusCode, string(respBody))
 	}
 
