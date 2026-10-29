@@ -13,6 +13,9 @@ const pushChannel = "push"
 // publicKeyLen is the size of an X25519 public key.
 const publicKeyLen = 32
 
+// sealedProvider is the driver name of sealed push, which seals to a device key.
+const sealedProvider = "sealed"
+
 // SaveDevice registers a device, or refreshes it when the same app, user and
 // public key (or address, for a device without a key) is already registered.
 // It sets Channel to "push" when empty and stamps UpdatedAt and LastSeenAt.
@@ -85,6 +88,11 @@ func validateDevice(d *device.Device) error {
 		return invalidDevice("channel must be %q", pushChannel)
 	case d.PublicKey != nil && len(d.PublicKey) != publicKeyLen:
 		return invalidDevice("public key must be %d bytes", publicKeyLen)
+	case d.Provider == sealedProvider && len(d.PublicKey) != publicKeyLen:
+		return invalidDevice("a sealed device needs a %d-byte public key", publicKeyLen)
+	case d.TimeZone == "Local":
+		// LoadLocation accepts it, and it means the server's zone.
+		return invalidDevice("unknown time zone")
 	}
 	if d.TimeZone != "" {
 		if _, err := time.LoadLocation(d.TimeZone); err != nil {

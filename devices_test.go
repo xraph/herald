@@ -54,6 +54,9 @@ func TestSaveDeviceValidates(t *testing.T) {
 		"missing address": func(d *device.Device) { d.Address = "" },
 		"bad channel":     func(d *device.Device) { d.Channel = "email" },
 		"short key":       func(d *device.Device) { d.PublicKey = make([]byte, 31) },
+		"sealed no key":   func(d *device.Device) { d.Provider, d.PublicKey = "sealed", nil },
+		"sealed 0 key":    func(d *device.Device) { d.Provider, d.PublicKey = "sealed", []byte{} },
+		"local time zone": func(d *device.Device) { d.TimeZone = "Local" },
 		"bad time zone":   func(d *device.Device) { d.TimeZone = "Mars/Olympus" },
 		"bad quiet hours": func(d *device.Device) { d.QuietHours = &device.QuietHours{Start: "22:00", End: "7"} },
 	}
@@ -66,6 +69,15 @@ func TestSaveDeviceValidates(t *testing.T) {
 				t.Fatalf("err = %v, want ErrInvalidDevice", err)
 			}
 		})
+	}
+}
+
+func TestSaveDeviceAcceptsSealedWithKey(t *testing.T) {
+	h := newHerald(t, memory.New())
+	d := testDevice()
+	d.Provider, d.PublicKey = "sealed", make([]byte, 32)
+	if err := h.SaveDevice(bg, d); err != nil {
+		t.Fatalf("SaveDevice: %v", err)
 	}
 }
 
