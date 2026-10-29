@@ -1,6 +1,7 @@
 package herald
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"time"
@@ -163,6 +164,26 @@ func (h *Herald) deviceMessage(j *fanoutJob, d *device.Device) *message.Message 
 	}
 }
 
+// deleteGoneDevice removes a device whose address the driver reported dead.
+// A phone that re-registered after the list keeps its row ID (SaveDevice
+// upserts on the public key), so the row is re-read first and deleted only
+// while it still holds the address and key that failed.
+func (h *Herald) deleteGoneDevice(ctx context.Context, d *device.Device) {
+	cur, err := h.devices.GetDevice(ctx, d.AppID, d.ID)
+	switch {
+	case errors.Is(err, device.ErrNotFound):
+		return
+	case err != nil:
+		h.logger.Warn("herald: could not re-read a gone device", "device_id", d.ID, "error", err)
+		return
+	case cur.Address != d.Address || !bytes.Equal(cur.PublicKey, d.PublicKey):
+		return
+	}
+	if delErr := h.devices.DeleteDevice(ctx, d.AppID, d.ID); delErr != nil && !errors.Is(delErr, device.ErrNotFound) {
+		h.logger.Warn("herald: could not delete a gone device", "device_id", d.ID, "error", delErr)
+	}
+}
+
 // deliverToDevice sends to one device and records the outcome. A driver that
 // reports the address gone gets the device deleted.
 func (h *Herald) deliverToDevice(ctx context.Context, j *fanoutJob, d *device.Device) *SendResult {
@@ -184,9 +205,7 @@ func (h *Herald) deliverToDevice(ctx context.Context, j *fanoutJob, d *device.De
 		case err != nil:
 			del = message.Delivery{Status: message.StatusFailed, Error: err.Error()}
 			if errors.Is(err, driver.ErrAddressGone) {
-				if delErr := h.devices.DeleteDevice(ctx, d.AppID, d.ID); delErr != nil {
-					h.logger.Warn("herald: could not delete a gone device", "device_id", d.ID, "error", delErr)
-				}
+				h.deleteGoneDevice(ctx, d)
 			}
 		default:
 			sentAt := time.Now().UTC()

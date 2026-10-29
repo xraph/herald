@@ -2,6 +2,7 @@ package herald
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -18,11 +19,12 @@ import (
 	"github.com/xraph/herald/store/memory"
 )
 
-func seedPushProvider(t *testing.T, h *Herald, driverName string) {
+// seedPushProvider adds an enabled push provider backed by the "rec" driver.
+func seedPushProvider(t *testing.T, h *Herald) {
 	t.Helper()
 	p := &provider.Provider{
-		ID: id.NewProviderID(), AppID: "app_a", Name: "push-" + driverName, Channel: "push",
-		Driver: driverName, Enabled: true,
+		ID: id.NewProviderID(), AppID: "app_a", Name: "push-rec", Channel: "push",
+		Driver: "rec", Enabled: true,
 	}
 	if err := h.Store().CreateProvider(bg, p); err != nil {
 		t.Fatalf("create provider: %v", err)
@@ -49,7 +51,7 @@ func fanoutHerald(t *testing.T) (*Herald, *recordingDriver, *memory.Store) {
 	rec := &recordingDriver{name: "rec", channel: "push", vendorID: "pm_1"}
 	h := newHerald(t, st, WithDriver(rec))
 	h.now = func() time.Time { return time.Date(2026, 10, 28, 14, 30, 0, 0, time.UTC) }
-	seedPushProvider(t, h, "rec")
+	seedPushProvider(t, h)
 	return h, rec, st
 }
 
@@ -248,7 +250,7 @@ func TestPushFanOutLogsDeviceIDNotAddress(t *testing.T) {
 func TestPushFanOutNeedsADeviceStore(t *testing.T) {
 	st := struct{ store.Store }{memory.New()}
 	h := newHerald(t, st, WithDriver(&recordingDriver{name: "rec", channel: "push"}))
-	seedPushProvider(t, h, "rec")
+	seedPushProvider(t, h)
 	_, err := h.Send(bg, pushReq("u1", nil))
 	if !errors.Is(err, ErrNoDeviceStore) {
 		t.Fatalf("err = %v, want ErrNoDeviceStore", err)
@@ -279,7 +281,7 @@ func TestPushRawSendUsesSubjectAsTitle(t *testing.T) {
 	pushRec := &recordingDriver{name: "rec", channel: "push"}
 	mailRec := &recordingDriver{name: "mail", channel: "email"}
 	h := newHerald(t, st, WithDriver(pushRec), WithDriver(mailRec))
-	seedPushProvider(t, h, "rec")
+	seedPushProvider(t, h)
 	seedProvider(t, h, "app_a", "mail", "mail", 0, true)
 
 	if _, err := h.Send(bg, &SendRequest{AppID: "app_a", Channel: "push", To: []string{"tok-1"}, Subject: "Checkout is failing"}); err != nil {
@@ -310,5 +312,47 @@ func TestPushWithRecipientsSkipsFanOut(t *testing.T) {
 	}
 	if res.Devices != nil {
 		t.Errorf("Devices = %+v, want nil", res.Devices)
+	}
+}
+
+// reregisterDriver changes the stored device while the send is in flight, the
+// way a phone that re-registers between the list and the send does.
+type reregisterDriver struct {
+	recordingDriver
+	onSend func()
+}
+
+func (d *reregisterDriver) Send(ctx context.Context, m *driver.OutboundMessage) (*driver.DeliveryResult, error) {
+	if d.onSend != nil {
+		d.onSend()
+	}
+	return d.recordingDriver.Send(ctx, m)
+}
+
+func TestPushFanOutKeepsDeviceThatReRegisteredMidSend(t *testing.T) {
+	st := memory.New()
+	rd := &reregisterDriver{recordingDriver: recordingDriver{name: "rec", channel: "push", vendorID: "pm_1"}}
+	h := newHerald(t, st, WithDriver(rd))
+	seedPushProvider(t, h)
+	a := saveFanoutDevice(t, h, "u1", "rec", "tok-old", 1)
+	rd.errByAddr = map[string]error{"tok-old": fmt.Errorf("x: %w", driver.ErrAddressGone)}
+	rd.onSend = func() {
+		// Same public key, new address: SaveDevice keeps the row ID.
+		saveFanoutDevice(t, h, "u1", "rec", "tok-new", 1)
+	}
+
+	res, err := h.Send(bg, pushReq("u1", nil))
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if res.Devices[0].Status != message.StatusFailed {
+		t.Errorf("result = %+v, want failed", res.Devices[0])
+	}
+	got, err := h.GetDevice(bg, "app_a", a.ID)
+	if err != nil {
+		t.Fatalf("GetDevice: %v, want the re-registered device kept", err)
+	}
+	if got.Address != "tok-new" {
+		t.Errorf("address = %q, want tok-new", got.Address)
 	}
 }
