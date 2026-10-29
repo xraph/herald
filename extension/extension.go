@@ -153,6 +153,7 @@ func (e *Extension) Init(fapp forge.App) error {
 		herald.WithDriver(&email.ResendDriver{}),
 		herald.WithDriver(&sms.TwilioDriver{}),
 		herald.WithDriver(&push.FCMDriver{}),
+		herald.WithDriver(&push.SealedDriver{}),
 		herald.WithDriver(&inapp.Driver{}),
 	)
 

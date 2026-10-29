@@ -193,7 +193,8 @@ suppressed (opted out, never sent)
 | `delivered` | Declared for provider confirmations; nothing records it on a message today |
 | `failed` | The driver returned an error (there is one attempt, no retries) |
 | `bounced` | Declared, but nothing sets it today |
-| `suppressed` | The user opted out, so nothing was sent |
+| `suppressed` | The user opted out, or the device was in quiet hours, so nothing was sent |
+| `filtered` | A push fan-out skipped the device because your `DeviceFilter` said no |
 
 ```go
 const (
@@ -205,6 +206,7 @@ const (
     StatusDelivered Status = "delivered"
 
     StatusSuppressed Status = "suppressed"
+    StatusFiltered   Status = "filtered"
 )
 ```
 
@@ -263,10 +265,33 @@ type SendResult struct {
     ProviderMessageID string         `json:"provider_message_id,omitempty"`
     Error             string         `json:"error,omitempty"`
     Logged            bool           `json:"logged"`
+    Devices           []DeviceResult `json:"devices,omitempty"`
 }
 ```
 
+`Devices` is only set by a push fan-out. It holds one `DeviceResult` per device, with `DeviceID`, `Status` and `Error`.
+
 `Send` logs one message per address in `To`, but it returns only the first recipient's result. If you pass several addresses and need every outcome, send them one at a time or query the message log. `Logged` is false when the log row couldn't be written; the send still happened.
+
+## Push to a user's devices
+
+A send on the `push` channel with a `UserID` and an empty `To` doesn't go to one address. Herald lists the user's registered devices and delivers to each one the resolved provider can reach, with a message row per device.
+
+```go
+result, err := h.Send(ctx, &herald.SendRequest{
+    AppID:   "app_01abc...",
+    UserID:  "user_01xyz...",
+    Channel: "push",
+    Subject: "Build finished",
+    Body:    "Your deploy went out.",
+    Push:    &driver.PushOptions{Urgency: driver.UrgencyTimeSensitive},
+    DeviceFilter: func(d *device.Device) bool { return d.Platform == "ios" },
+})
+```
+
+`DeviceFilter` gives a device it rejects the status `filtered`. A device inside its quiet hours gets `suppressed`, unless the push is `critical` or a withdrawal. A device whose driver answers `driver.ErrAddressGone` is deleted. The overall status is `sent` if any device took the push, else `failed` if any failed, else `suppressed`, else `filtered`, and a user with no devices gets `filtered` with the error `no devices`. A fan-out without a device store returns `herald.ErrNoDeviceStore`. [Devices](/docs/subsystems/devices) has the registry, quiet hours and the push options.
+
+Any push whose rendered title is empty, which includes a raw send with no template, uses `Subject` as the title.
 
 ## API Endpoints
 

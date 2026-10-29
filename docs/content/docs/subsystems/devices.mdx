@@ -1,0 +1,129 @@
+---
+title: Devices
+description: Register the phones a user receives push on, send to all of them at once, and keep quiet hours per device.
+---
+
+A device is one phone or tablet that a user receives push notifications on. Herald keeps a registry of them, so you can send one push to a user and let Herald fan it out to every device they have.
+
+You need a device store for this. The memory and Postgres stores have one. SQLite and Mongo have no device store in v1.9.0, so with those backends pass a store of your own with `herald.WithDeviceStore`, which takes any `device.Store`. Without one, every device method returns `herald.ErrNoDeviceStore`.
+
+## Register a device
+
+```go
+d := &device.Device{
+    AppID:    "app_01abc...",
+    UserID:   "user_01xyz...",
+    Provider: "fcm",
+    Address:  fcmToken,
+    Platform: "android",
+    Name:     "Pixel 9",
+    TimeZone: "Europe/London",
+    QuietHours: &device.QuietHours{Start: "22:00", End: "07:00"},
+}
+if err := h.SaveDevice(ctx, d); err != nil {
+    return err
+}
+fmt.Println(d.ID) // hdev_...
+```
+
+`SaveDevice` is an upsert. Within one app and user, a device is identified by its public key when it has one and by its address when it doesn't (`device.UniqueKey`). Save the same device again and Herald refreshes it, keeping the stored ID and `CreatedAt`. It sets `Channel` to `push` when you leave it empty, and stamps `UpdatedAt` and `LastSeenAt` on every call. The ID and `CreatedAt` are written back into the struct you passed.
+
+Herald checks the device before it stores it, and a failure wraps `device.ErrInvalidDevice`. It needs an app ID, a user ID, a provider and an address. The channel can only be `push`. A public key, if you give one, is exactly 32 bytes, and a `sealed` device must have one. The time zone has to be an IANA name your system knows (`Local` is refused, since it would mean the server's zone), and both quiet hours values have to be `HH:MM` on a 24-hour clock.
+
+| Field | What it holds |
+|-------|---------------|
+| `Provider` | The driver that delivers to this device, such as `fcm`, `apns` or `sealed` |
+| `Address` | The platform token, or for `sealed` the gateway handle |
+| `PublicKey` | The device's X25519 public key. Required for `sealed`, unused by the others |
+| `Platform` | `android` or `ios` |
+| `Locale`, `TimeZone` | What the device reports. The time zone drives quiet hours |
+| `QuietHours` | A daily window in the device's local time |
+| `Settings` | A map your application owns. Herald stores it and never reads it |
+
+The rest of the registry is plain CRUD:
+
+```go
+d, err := h.GetDevice(ctx, appID, deviceID)        // ErrDeviceNotFound if missing
+all, err := h.ListDevices(ctx, appID, userID)      // oldest first
+err = h.DeleteDevice(ctx, appID, deviceID)         // ErrDeviceNotFound if missing
+err = h.DeleteUserDevices(ctx, appID, userID)      // a user with none is fine
+```
+
+A device from another app is never visible to the app you ask as. You get `ErrDeviceNotFound`.
+
+## Send to a user
+
+Set `Channel` to `push`, give a `UserID` and leave `To` empty. Herald lists the user's devices, keeps the ones whose `Provider` is the driver of the provider it resolved, and delivers to each.
+
+```go
+result, err := h.Send(ctx, &herald.SendRequest{
+    AppID:   "app_01abc...",
+    UserID:  "user_01xyz...",
+    Channel: "push",
+    Subject: "Build finished",
+    Body:    "Your deploy to production went out.",
+    Push: &driver.PushOptions{
+        Urgency:    driver.UrgencyTimeSensitive,
+        CollapseID: "deploy-42",
+    },
+})
+for _, dr := range result.Devices {
+    fmt.Println(dr.DeviceID, dr.Status, dr.Error)
+}
+```
+
+Any push whose rendered title is empty, which includes a raw send with no template, uses `Subject` as the title. Before v1.9.0 that title was empty.
+
+Each device gets its own message row, with the device ID as the recipient. The address is never logged. The overall `result.Status` follows these rules:
+
+| Status | When |
+|--------|------|
+| `sent` | At least one device accepted the push |
+| `failed` | Nothing was sent and at least one device failed. `Error` holds the first error |
+| `suppressed` | Nothing was sent or failed, and quiet hours held at least one device back |
+| `filtered` | Every device was skipped by your `DeviceFilter` |
+
+A user with no matching devices comes back `filtered` with the error `no devices`.
+
+### Choose devices
+
+`DeviceFilter` runs once per device. Return false and that device gets the status `filtered` and a message row that says so.
+
+```go
+req.DeviceFilter = func(d *device.Device) bool {
+    return d.Platform == "ios"
+}
+```
+
+### Quiet hours
+
+A device with `QuietHours` set doesn't get a push inside the window. Herald reads the current time in the device's own time zone, and falls back to UTC when the zone is empty or unknown. The window is `[Start, End)`, an `End` earlier than `Start` wraps midnight, and equal values mean never.
+
+Two kinds of push ignore quiet hours. A push with `UrgencyCritical` always goes through, and so does a withdrawal (`Kind: driver.PushKindWithdraw`), because removing a notification should never wait for morning. Everything else inside the window is `suppressed`. The `forge_herald_messages_suppressed_total` counter includes these.
+
+### Dead devices
+
+When a driver returns `driver.ErrAddressGone` (FCM says the token is unregistered, APNs answers 410 or `BadDeviceToken`, the gateway answers 410), Herald deletes that device straight away, then records the failed delivery. It re-reads the device first. If the phone registered again while the send was in flight, so the stored address or key no longer matches the one that failed, the device stays and only that delivery counts as failed. You don't need to clean up after it. If the delete itself fails, Herald logs a warning and carries on.
+
+## Push options
+
+`SendRequest.Push` takes a `*driver.PushOptions`. A nil value gives you the v1.8 behaviour.
+
+| Field | Effect |
+|-------|--------|
+| `Urgency` | `passive`, `active` (the default), `time_sensitive` or `critical` |
+| `Kind` | `show` (the default) or `withdraw`, which removes a notification shown earlier |
+| `CollapseID` | A later push with the same ID replaces the earlier one |
+| `TTL` | How long the provider may hold the push. Zero leaves it to the provider |
+| `ThreadID` | Groups notifications on the device |
+| `Category` | Names the action set the device shows |
+| `Data` | Extra payload. It wins over provider-level `data.` settings |
+| `DataOnly` | No visible notification, only data |
+| `MutableContent` | Lets an iOS notification service extension rewrite the alert |
+| `ContentAvailable` | Wakes the app for a background update |
+
+[Drivers](/docs/subsystems/drivers) says how FCM, APNs and the sealed driver map each one.
+
+## Sealed push
+
+A `sealed` device gets its notification encrypted to its own public key, so the gateway in the middle relays bytes it can't read. [Push gateway](/docs/subsystems/push-gateway) covers the whole flow. For a sealed device, save the gateway handle as the `Address` and the 32-byte X25519 public key as the `PublicKey`, and register the `sealed` driver on a provider.

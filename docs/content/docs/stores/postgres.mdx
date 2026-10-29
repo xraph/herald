@@ -3,7 +3,7 @@ title: PostgreSQL Store
 description: Production-ready PostgreSQL backend using Grove ORM with pgdriver.
 ---
 
-The PostgreSQL store (`herald/store/postgres`) provides a production-ready backend for Herald using [Grove ORM](https://github.com/xraph/grove) with `pgdriver`. It stores all Herald entities in 7 tables with JSONB columns for maps and arrays, indexed for efficient querying, and supports upsert with `ON CONFLICT`.
+The PostgreSQL store (`herald/store/postgres`) provides a production-ready backend for Herald using [Grove ORM](https://github.com/xraph/grove) with `pgdriver`. It stores all Herald entities in 8 tables with JSONB columns for maps and arrays, indexed for efficient querying, and supports upsert with `ON CONFLICT`.
 
 ## Installation
 
@@ -51,7 +51,7 @@ func New(db *grove.DB) *Store
 
 ## Tables
 
-The store creates 7 tables. All use `TEXT` primary keys (TypeIDs), `TIMESTAMPTZ` timestamps defaulting to `NOW()`, and `JSONB` for structured data.
+The store creates 8 tables. All use `TEXT` primary keys (TypeIDs), `TIMESTAMPTZ` timestamps defaulting to `NOW()`, and `JSONB` for structured data.
 
 ### herald_providers
 
@@ -200,6 +200,27 @@ Stores scoped provider configuration overrides (app/org/user level).
 
 **Unique constraint:** `(app_id, scope, scope_id)`
 
+### herald_devices
+
+Stores the devices a user receives push on. Migration `20261028000001` creates it, and `herald.New` picks the store up as the device store on its own.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | `TEXT PRIMARY KEY` | TypeID (`hdev_...`) |
+| `app_id` | `TEXT NOT NULL` | Application scope |
+| `user_id` | `TEXT NOT NULL` | Owner |
+| `channel` | `TEXT NOT NULL DEFAULT 'push'` | Always `push` today |
+| `provider` | `TEXT NOT NULL` | Driver name, such as `fcm` or `sealed` |
+| `address` | `TEXT NOT NULL` | Platform token, or the gateway handle |
+| `public_key` | `BYTEA` | X25519 public key, for sealed devices |
+| `unique_key` | `TEXT NOT NULL` | `pk:<hex>` for a device with a key, `addr:<address>` otherwise |
+| `platform`, `name`, `locale`, `time_zone` | `TEXT NOT NULL DEFAULT ''` | |
+| `quiet_start`, `quiet_end` | `TEXT NOT NULL DEFAULT ''` | Quiet hours as `HH:MM`, empty for none |
+| `settings` | `JSONB NOT NULL DEFAULT '{}'` | Opaque to Herald |
+| `last_seen_at`, `created_at`, `updated_at` | `TIMESTAMPTZ NOT NULL DEFAULT NOW()` | |
+
+**Unique constraint:** `(app_id, user_id, unique_key)`. `SaveDevice` upserts on it.
+
 ## UPSERT Patterns
 
 The PostgreSQL store uses `INSERT ... ON CONFLICT DO UPDATE` for preferences and scoped configs, ensuring idempotent writes:
@@ -224,7 +245,7 @@ _, err := s.pg.NewInsert(m).
 
 | Method | Behaviour |
 |--------|-----------|
-| `Migrate(ctx)` | Creates all 7 tables and indexes via Grove's migration orchestrator |
+| `Migrate(ctx)` | Creates all 8 tables and indexes via Grove's migration orchestrator |
 | `Ping(ctx)` | Calls `db.Ping(ctx)` to verify database connectivity |
 | `Close()` | Calls `db.Close()` to release the database connection |
 

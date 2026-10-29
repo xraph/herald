@@ -66,6 +66,19 @@ driver.ErrDriverNotFound // "herald: driver not found"
 | `herald.ErrSendFailed` | `"herald: send failed"` | Notification delivery failed at the driver level. |
 | `herald.ErrInvalidChannel` | `"herald: invalid channel type"` | An unsupported channel type was specified. |
 
+### Device and push errors
+
+| Error | Value | Description |
+|-------|-------|-------------|
+| `driver.ErrAddressGone` | `"herald: address gone"` | A push driver says the device address no longer exists. Herald deletes the device in a fan-out, and you should stop sending to that address. |
+| `herald.ErrNoDeviceStore` | `"herald: no device store is configured"` | A device method or a push fan-out ran with no device store. Use the memory or Postgres store, or pass your own with `herald.WithDeviceStore`. |
+| `herald.ErrDeviceNotFound` | `"herald: device not found"` | No such device for the app. It is the same value as `device.ErrNotFound`. |
+| `device.ErrInvalidDevice` | `"herald: invalid device"` | A device or its quiet hours failed validation. The error wraps it with the reason. |
+| `push.ErrPayloadTooLarge` | `"herald: push payload too large"` | A sealed envelope is over `push.MaxEnvelopeBytes` (2560 bytes) before sealing. |
+| `push.ErrMissingPublicKey` | `"herald: push device has no public key"` | The sealed driver got a device without a 32-byte public key. |
+
+`driver.ErrAddressGone` is wrapped by the FCM, APNs and sealed drivers, so match it with `errors.Is`.
+
 ### Inbox errors
 
 | Error | Value | Description |

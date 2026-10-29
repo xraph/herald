@@ -41,6 +41,11 @@ type OutboundMessage struct {
 	Text     string            `json:"text,omitempty"`
 	Title    string            `json:"title,omitempty"`
 	Data     map[string]string `json:"data,omitempty"`
+
+	// Push holds per-message push options. Nil means the v1.8 behaviour.
+	Push *PushOptions `json:"-"`
+	// PublicKey is the recipient device's X25519 public key. Push fan-out only.
+	PublicKey []byte `json:"-"`
 }
 
 // DeliveryResult contains the outcome of a delivery attempt.

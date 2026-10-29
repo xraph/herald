@@ -22,6 +22,9 @@ const (
 	// StatusSuppressed is a send Herald chose not to make, because the
 	// recipient opted out of this notification type on this channel.
 	StatusSuppressed Status = "suppressed"
+
+	// StatusFiltered is a device the caller's filter dropped.
+	StatusFiltered Status = "filtered"
 )
 
 // Message represents a sent or queued notification in the delivery log.

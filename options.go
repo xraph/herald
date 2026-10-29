@@ -3,11 +3,13 @@ package herald
 import (
 	"errors"
 	"log/slog"
+	"time"
 
 	gometrics "github.com/xraph/go-utils/metrics"
 
 	"github.com/xraph/herald/bridge"
 	"github.com/xraph/herald/credential"
+	"github.com/xraph/herald/device"
 	"github.com/xraph/herald/driver"
 	"github.com/xraph/herald/scope"
 	"github.com/xraph/herald/store"
@@ -25,6 +27,11 @@ type Herald struct {
 	logger    *slog.Logger
 	metrics   *sendMetrics
 
+	// devices backs the device methods. It is nil when neither WithDeviceStore
+	// nor the main store provides one.
+	devices device.Store
+	now     func() time.Time
+
 	// credential encryption, built in New from the options below
 	cipher       *credential.Cipher
 	currentKey   *credential.Key
@@ -40,6 +47,7 @@ func New(opts ...Option) (*Herald, error) {
 		config:  DefaultConfig(),
 		drivers: driver.NewRegistry(),
 		logger:  slog.Default(),
+		now:     time.Now,
 	}
 
 	for _, opt := range opts {
@@ -63,6 +71,12 @@ func New(opts ...Option) (*Herald, error) {
 		h.cipher = c
 	}
 
+	if h.devices == nil {
+		if ds, ok := h.store.(device.Store); ok {
+			h.devices = ds
+		}
+	}
+
 	h.wireServices()
 
 	return h, nil
@@ -78,6 +92,16 @@ func (h *Herald) wireServices() {
 func WithStore(s store.Store) Option {
 	return func(h *Herald) error {
 		h.store = s
+		return nil
+	}
+}
+
+// WithDeviceStore sets the store the device methods use. Give it when the main
+// store is wrapped in a type that hides its device methods. Without it, New
+// uses the main store when that implements device.Store.
+func WithDeviceStore(s device.Store) Option {
+	return func(h *Herald) error {
+		h.devices = s
 		return nil
 	}
 }

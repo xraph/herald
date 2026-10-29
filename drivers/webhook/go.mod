@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/xraph/herald v1.8.0
-	github.com/xraph/relay v1.8.0
+	github.com/xraph/relay v1.8.1
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/sdk v1.45.0
 )
@@ -18,7 +18,7 @@ require (
 	github.com/gofrs/uuid/v5 v5.3.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
-	github.com/xraph/go-utils v1.4.1 // indirect
+	github.com/xraph/go-utils v1.5.0 // indirect
 	go.jetify.com/typeid/v2 v2.0.0-alpha.3 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.70.0 // indirect

@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/xraph/herald/credential"
+	"github.com/xraph/herald/device"
 	"github.com/xraph/herald/store"
 	"github.com/xraph/herald/template"
 )
@@ -87,4 +88,11 @@ var (
 	// ErrCredentialKeyUnavailable means a credential was encrypted under a key
 	// that isn't configured. The message names the key ID.
 	ErrCredentialKeyUnavailable = credential.ErrKeyUnavailable
+
+	// ErrNoDeviceStore is returned by the device methods when neither the main
+	// store nor WithDeviceStore provides a device store.
+	ErrNoDeviceStore = errors.New("herald: no device store is configured")
+
+	// ErrDeviceNotFound is returned when a device does not exist for the app.
+	ErrDeviceNotFound = device.ErrNotFound
 )

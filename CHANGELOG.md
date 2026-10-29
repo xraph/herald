@@ -1,5 +1,69 @@
 # Changelog
 
+## v1.9.0
+
+Herald can push to a user's devices now, and send a push the gateway in the middle can't read. Most of it is new API, so nothing you already run changes unless you read the first section and it applies to you.
+
+### Before you upgrade
+
+- `drivers/apns` needs herald v1.9.0. It reads the new push options, so upgrade the root along with it.
+- A push whose rendered title is empty, which includes any raw send with no template, now uses `Subject` as the title. It used to arrive with an empty one, so if you worked around that by putting text in `Body` alone, check how those pushes look.
+- The Forge extension registers the `sealed` driver. A provider that names `sealed` works with no setup. If you registered your own driver under that name, rename it.
+- A push `Send` with `UserID` set and an empty `To` now fans out to the user's devices. It used to return a failed "no recipients" result. On a store with no device store (SQLite, Mongo) it returns `herald.ErrNoDeviceStore` instead.
+- The HTTP `sendNotification` route (`POST /send`) fans out by `user_id` for a push with no push options, since `Push` can't be set over JSON. A request that used to fail with no recipients now sends to every device the user has.
+- SQLite and Mongo have no device store in this release. Registering devices needs the memory or Postgres store, or a store of your own passed to `herald.WithDeviceStore`. Without one, the device methods return `herald.ErrNoDeviceStore`.
+
+### Push options
+
+- `SendRequest.Push` takes a `*driver.PushOptions`: `Urgency` (`passive`, `active`, `time_sensitive`, `critical`), `Kind` (`show` or `withdraw`), `CollapseID`, `TTL`, `ThreadID`, `Category`, `Data`, `DataOnly`, `MutableContent` and `ContentAvailable`. A nil value keeps the v1.8 behaviour. Drivers read them from `OutboundMessage.Push`.
+- `driver.ErrAddressGone` is what a push driver returns when the platform says a token is dead. Match it with `errors.Is`.
+
+### FCM
+
+- A new `service_account` credential takes the Google service account JSON key. Herald mints access tokens from it, caches them and replaces one five minutes before it expires. `project_id` falls back to the key's own. If you set more than one credential, `service_account` wins over `access_token`, which wins over `server_key`.
+- The push options map to data-only messages, a `HIGH` Android priority for `time_sensitive` and `critical`, `collapse_key` and `ttl`.
+- `UNREGISTERED`, or a bad `message.token`, returns `driver.ErrAddressGone`.
+
+### APNs
+
+- The payload comes from the push options: interruption levels, a critical sound, `mutable-content`, `category`, `thread-id` and custom top-level keys (an `aps` key is ignored). The `apns-priority` header is 10, or 5 for `passive`, and `TTL` and `CollapseID` set `apns-expiration` and `apns-collapse-id`.
+- A background push (no title or text, `ContentAvailable` set) sends an `aps` of `content-available` alone, as Apple requires. A push with nothing to show and no `ContentAvailable` returns an error instead of sending an empty alert.
+- The device token is escaped in the request path. A 410 or a `BadDeviceToken` returns `driver.ErrAddressGone`. Transport errors no longer carry the request URL, which held the device token.
+
+### Devices
+
+- A new `device` package holds `Device`, `QuietHours` and the `Store` interface. `herald_devices` (migration `20261028000001`) is the Postgres table, and the memory store has one too. IDs start with `hdev`.
+- `SaveDevice`, `GetDevice`, `ListDevices`, `DeleteDevice` and `DeleteUserDevices` on `*Herald`. `WithDeviceStore` takes any `device.Store`, and without it `New` uses your main store when that implements the interface.
+- A push `Send` with a `UserID` and an empty `To` fans out to the user's devices. `DeviceFilter` picks which ones, and each device gets its own result in `SendResult.Devices` and its own message row.
+- Quiet hours are per device, in the device's time zone (UTC when it has none). Inside the window a push is `suppressed`, except a `critical` one and a withdrawal. The new `filtered` status marks a device your filter skipped.
+- A device whose driver returns `driver.ErrAddressGone` is deleted, unless it re-registered during the send. Herald re-reads it first and keeps it when its address or key changed.
+- A `sealed` device needs a 32-byte public key, and the time zone `Local` is refused.
+- `herald.ErrNoDeviceStore`, `herald.ErrDeviceNotFound` and `device.ErrInvalidDevice` are new. `forge_herald_messages_suppressed_total` now counts devices held back by quiet hours.
+
+### Sealed push
+
+- `push.SealedDriver` (`sealed`) encrypts each notification to the device's own X25519 key with HPKE (DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, ChaCha20-Poly1305, info `herald push v1`) and posts it to a gateway. The envelope is at most `push.MaxEnvelopeBytes` (2560 bytes), or you get `push.ErrPayloadTooLarge`, and a device with no key gets `push.ErrMissingPublicKey`.
+- It takes a `signing_key` credential (a base64 Ed25519 seed) and a `gateway_url` setting (`https`, or `http` for loopback only). Requests carry `X-Herald-Key`, `X-Herald-Timestamp` and `X-Herald-Signature`.
+- A withdraw needs a `CollapseID`. The driver returns `push.ErrMissingCollapseID` without sending, and the gateway answers 400.
+- `push.KeyID` names a public key. The fixed test vectors in `driver/push/testdata/sealed_vectors.json` are there for the Android and iOS apps to check their own code against.
+
+### Gateway
+
+- The new `pushgateway` package is an `http.Handler` you run yourself. `pushgateway.New` takes your sealing keys, an `Android` and an `IOS` platform, rate limits and a logger.
+- `POST /v1/registrations` turns a platform token into an opaque handle (`h1.<key id>.<...>`). `POST /v1/send` checks a signed request (300 second window) and delivers through FCM or `drivers/apns`. It answers 202, 400, 401, 410, 429 with `Retry-After`, and 502.
+- A handle sealed under a key you retired answers 410, and so does a dead token. A platform you didn't configure answers 502, so a sender doesn't delete a device that is fine.
+- Limits default to 50 sends a second for each server key and 30 a minute for each device. A device is its platform plus its token, so registering again doesn't reset its budget.
+- `PlaceholderTitle` and `PlaceholderBody` can take at most 256 bytes together once JSON-encoded, and `New` rejects more. Registration checks the token: hex for iOS, and letters, digits, `_`, `-` and `:` for Android.
+- Dropping a sealing key makes every device sealed under it answer 410, and each Herald server deletes it. Keep a retired key at least as long as your apps take to register again. Logs hold only the server key fingerprint prefix, the platform, urgency, kind, outcome and latency.
+
+### Docs
+
+- New pages for devices and the push gateway. The drivers, delivery, observability and errors pages, the id page, and the Postgres, memory, SQLite and Mongo store pages cover what changed.
+
+### Dependencies
+
+- Moved to forge v1.13.2, grove v1.10.1 (with the Mongo, Postgres and SQLite drivers), chronicle v1.9.1, go-utils v1.5.0 and relay v1.8.1 (the webhook driver). No API changes were needed on our side.
+
 ## v1.8.0
 
 Every send is traced and measured now. In a Forge app you get it with nothing to configure.

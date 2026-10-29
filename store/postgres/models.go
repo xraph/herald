@@ -7,6 +7,7 @@ import (
 
 	"github.com/xraph/grove"
 
+	"github.com/xraph/herald/device"
 	"github.com/xraph/herald/id"
 	"github.com/xraph/herald/inbox"
 	"github.com/xraph/herald/message"
@@ -430,4 +431,83 @@ func fromScopedConfigModel(m *scopedConfigModel) (*scope.Config, error) {
 		CreatedAt:         m.CreatedAt,
 		UpdatedAt:         m.UpdatedAt,
 	}, nil
+}
+
+// --- Device models ---
+
+type deviceModel struct {
+	grove.BaseModel `grove:"table:herald_devices"`
+
+	ID         string            `grove:"id,pk"`
+	AppID      string            `grove:"app_id"`
+	UserID     string            `grove:"user_id"`
+	Channel    string            `grove:"channel"`
+	Provider   string            `grove:"provider"`
+	Address    string            `grove:"address"`
+	PublicKey  []byte            `grove:"public_key"`
+	UniqueKey  string            `grove:"unique_key"`
+	Platform   string            `grove:"platform"`
+	Name       string            `grove:"name"`
+	Locale     string            `grove:"locale"`
+	TimeZone   string            `grove:"time_zone"`
+	QuietStart string            `grove:"quiet_start"`
+	QuietEnd   string            `grove:"quiet_end"`
+	Settings   map[string]string `grove:"settings,type:jsonb"`
+	LastSeenAt time.Time         `grove:"last_seen_at"`
+	CreatedAt  time.Time         `grove:"created_at"`
+	UpdatedAt  time.Time         `grove:"updated_at"`
+}
+
+func toDeviceModel(d *device.Device) *deviceModel {
+	m := &deviceModel{
+		ID:         d.ID,
+		AppID:      d.AppID,
+		UserID:     d.UserID,
+		Channel:    d.Channel,
+		Provider:   d.Provider,
+		Address:    d.Address,
+		PublicKey:  d.PublicKey,
+		UniqueKey:  device.UniqueKey(d),
+		Platform:   d.Platform,
+		Name:       d.Name,
+		Locale:     d.Locale,
+		TimeZone:   d.TimeZone,
+		Settings:   jsonbObject(d.Settings),
+		LastSeenAt: d.LastSeenAt,
+		CreatedAt:  d.CreatedAt,
+		UpdatedAt:  d.UpdatedAt,
+	}
+	if d.QuietHours != nil {
+		m.QuietStart, m.QuietEnd = d.QuietHours.Start, d.QuietHours.End
+	}
+	return m
+}
+
+func fromDeviceModel(m *deviceModel) *device.Device {
+	d := &device.Device{
+		ID:         m.ID,
+		AppID:      m.AppID,
+		UserID:     m.UserID,
+		Channel:    m.Channel,
+		Provider:   m.Provider,
+		Address:    m.Address,
+		PublicKey:  m.PublicKey,
+		Platform:   m.Platform,
+		Name:       m.Name,
+		Locale:     m.Locale,
+		TimeZone:   m.TimeZone,
+		LastSeenAt: m.LastSeenAt,
+		CreatedAt:  m.CreatedAt,
+		UpdatedAt:  m.UpdatedAt,
+	}
+	if len(m.PublicKey) == 0 {
+		d.PublicKey = nil
+	}
+	if len(m.Settings) > 0 {
+		d.Settings = m.Settings
+	}
+	if m.QuietStart != "" || m.QuietEnd != "" {
+		d.QuietHours = &device.QuietHours{Start: m.QuietStart, End: m.QuietEnd}
+	}
+	return d
 }

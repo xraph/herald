@@ -18,6 +18,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/xraph/herald/bridge"
+	"github.com/xraph/herald/device"
 	"github.com/xraph/herald/driver"
 	"github.com/xraph/herald/id"
 	"github.com/xraph/herald/inbox"
@@ -45,6 +46,12 @@ type SendRequest struct {
 	Metadata map[string]string `json:"metadata,omitempty"`
 	// ProviderID sends through this provider instead of resolving one. It must belong to AppID and handle Channel; a disabled provider is allowed, because naming it is the explicit act.
 	ProviderID string `json:"provider_id,omitempty"`
+	// Push carries per-message push options, copied to the driver as is.
+	Push *driver.PushOptions `json:"-"`
+	// DeviceFilter, when set, decides per device whether a push fan-out
+	// (Channel "push", UserID set, To empty) delivers to it. Returning false
+	// gives that device the status filtered.
+	DeviceFilter func(*device.Device) bool `json:"-"`
 }
 
 // NotifyRequest sends a notification across multiple channels using a template.
@@ -62,6 +69,13 @@ type NotifyRequest struct {
 	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
+// DeviceResult is the outcome for one device of a push fan-out.
+type DeviceResult struct {
+	DeviceID string         `json:"device_id"`
+	Status   message.Status `json:"status"`
+	Error    string         `json:"error,omitempty"`
+}
+
 // SendResult contains the outcome of a send operation.
 type SendResult struct {
 	MessageID id.MessageID   `json:"message_id"`
@@ -74,6 +88,8 @@ type SendResult struct {
 	// Logged is false when the message log couldn't be written. The send
 	// still happened; it just won't appear in the log.
 	Logged bool `json:"logged"`
+	// Devices is the per-device outcome of a push fan-out. Nil otherwise.
+	Devices []DeviceResult `json:"devices,omitempty"`
 }
 
 // Send delivers a notification on a single channel.
@@ -143,8 +159,25 @@ func (h *Herald) send(ctx context.Context, req *SendRequest, channel string, spa
 		Text:    rendered.Text,
 		Title:   rendered.Title,
 		Data:    data,
+		Push:    req.Push,
+	}
+	if req.Channel == pushChannel && outbound.Title == "" {
+		// Raw sends have no template title.
+		outbound.Title = rendered.Subject
 	}
 	applyFrom(outbound, resolved, req.Channel, prov)
+
+	if req.Channel == pushChannel && req.UserID != "" && len(req.To) == 0 {
+		r, err := h.sendToDevices(ctx, &fanoutJob{
+			req: req, channel: channel, span: span, prov: prov, drv: drv,
+			outbound: outbound, rendered: rendered, dataErr: dataErr,
+		})
+		if err != nil {
+			return nil, err
+		}
+		h.auditSend(ctx, req, prov, resolved, r)
+		return r, nil
+	}
 
 	now := time.Now().UTC()
 	results := make([]*SendResult, 0, len(req.To))
@@ -241,6 +274,12 @@ func (h *Herald) send(ctx context.Context, req *SendRequest, channel string, spa
 	}
 
 	r := results[0]
+	h.auditSend(ctx, req, prov, resolved, r)
+	return r, nil
+}
+
+// auditSend writes the one audit event of a send, from its first result.
+func (h *Herald) auditSend(ctx context.Context, req *SendRequest, prov *provider.Provider, resolved *scope.ResolveResult, r *SendResult) {
 	outcome := bridge.OutcomeSuccess
 	if r.Status == message.StatusFailed {
 		outcome = bridge.OutcomeFailure
@@ -252,7 +291,6 @@ func (h *Herald) send(ctx context.Context, req *SendRequest, channel string, spa
 		"template": req.Template,
 		"status":   string(r.Status),
 	})
-	return r, nil
 }
 
 // ResolveProvider reports which provider would send on channel for this

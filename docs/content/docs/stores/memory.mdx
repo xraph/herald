@@ -27,7 +27,7 @@ store := memory.New()
 func New() *Store
 ```
 
-No arguments are needed. The store initializes maps for all 7 entity types:
+No arguments are needed. The store initializes maps for all 8 entity types:
 
 - `providers` -- `map[string]*provider.Provider`
 - `templates` -- `map[string]*template.Template`
@@ -36,6 +36,7 @@ No arguments are needed. The store initializes maps for all 7 entity types:
 - `notifications` -- `map[string]*inbox.Notification`
 - `preferences` -- `map[string]*preference.Preference` (key: `"appID:userID"`)
 - `scopedConfigs` -- `map[string]*scope.Config` (key: `"appID:scope:scopeID"`)
+- `devices` -- `map[string]*device.Device` (key: device ID)
 
 ## Implemented Interfaces
 
@@ -49,6 +50,7 @@ The memory store satisfies all six subsystem store interfaces plus the three lif
 | `inbox.Store` | `github.com/xraph/herald/inbox` | `CreateNotification`, `GetNotification`, `DeleteNotification`, `MarkRead`, `MarkAllRead`, `UnreadCount`, `ListNotifications` |
 | `preference.Store` | `github.com/xraph/herald/preference` | `GetPreference`, `SetPreference`, `DeletePreference` |
 | `scope.Store` | `github.com/xraph/herald/scope` | `GetScopedConfig`, `SetScopedConfig`, `DeleteScopedConfig`, `ListScopedConfigs` |
+| `device.Store` | `github.com/xraph/herald/device` | `SaveDevice`, `GetDevice`, `ListDevices`, `DeleteDevice`, `DeleteUserDevices` |
 
 Compile-time interface check:
 

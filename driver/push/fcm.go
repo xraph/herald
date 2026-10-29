@@ -8,14 +8,24 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
+
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 
 	"github.com/xraph/herald/driver"
 	"github.com/xraph/herald/message"
 )
 
 // FCMDriver delivers push notifications via Firebase Cloud Messaging HTTP v1 API.
-type FCMDriver struct{}
+//
+// The zero value is ready to use. It caches minted access tokens per service
+// account key, so share one instance rather than creating one per send.
+type FCMDriver struct {
+	mu     sync.Mutex
+	tokens map[string]*oauth2.Token
+}
 
 var _ driver.Driver = (*FCMDriver)(nil)
 
@@ -23,18 +33,64 @@ func (d *FCMDriver) Name() string    { return "fcm" }
 func (d *FCMDriver) Channel() string { return "push" }
 
 func (d *FCMDriver) Validate(credentials, _ map[string]string) error {
+	if sa := credentials["service_account"]; sa != "" {
+		if _, err := google.JWTConfigFromJSON([]byte(sa), fcmScope); err != nil {
+			return fmt.Errorf("fcm: credential 'service_account' is not a valid service account key")
+		}
+		return nil
+	}
 	if credentials["server_key"] == "" && credentials["access_token"] == "" {
-		return fmt.Errorf("fcm: missing required credential 'server_key' or 'access_token'")
+		return fmt.Errorf("fcm: missing required credential 'service_account', 'server_key' or 'access_token'")
 	}
 	return nil
 }
 
 type fcmMessage struct {
-	Message struct {
-		Token        string            `json:"token"`
-		Notification *fcmNotification  `json:"notification,omitempty"`
-		Data         map[string]string `json:"data,omitempty"`
-	} `json:"message"`
+	Message fcmBody `json:"message"`
+}
+
+type fcmBody struct {
+	Token        string            `json:"token"`
+	Notification *fcmNotification  `json:"notification,omitempty"`
+	Data         map[string]string `json:"data,omitempty"`
+	Android      *fcmAndroid       `json:"android,omitempty"`
+}
+
+type fcmAndroid struct {
+	Priority    string `json:"priority,omitempty"`
+	CollapseKey string `json:"collapse_key,omitempty"`
+	TTL         string `json:"ttl,omitempty"`
+}
+
+type fcmErrorBody struct {
+	Error struct {
+		Details []struct {
+			ErrorCode       string `json:"errorCode"`
+			FieldViolations []struct {
+				Field string `json:"field"`
+			} `json:"fieldViolations"`
+		} `json:"details"`
+	} `json:"error"`
+}
+
+// addressGone reports whether an FCM error body says the device token is dead.
+// A bad field other than the token is a payload bug and never counts.
+func addressGone(body []byte) bool {
+	var e fcmErrorBody
+	if json.Unmarshal(body, &e) != nil {
+		return false
+	}
+	for _, d := range e.Error.Details {
+		if d.ErrorCode == "UNREGISTERED" {
+			return true
+		}
+		for _, v := range d.FieldViolations {
+			if v.Field == "message.token" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type fcmNotification struct {
@@ -51,13 +107,44 @@ func (d *FCMDriver) Send(ctx context.Context, msg *driver.OutboundMessage) (*dri
 	accessToken := msg.Data["access_token"]
 	serverKey := msg.Data["server_key"]
 
+	if sa := msg.Data["service_account"]; sa != "" {
+		tok, err := d.serviceAccountToken(ctx, sa)
+		if err != nil {
+			return nil, err
+		}
+		accessToken = tok
+		if projectID == "" {
+			projectID = serviceAccountProject(sa)
+		}
+	}
+
 	var fcmMsg fcmMessage
 	fcmMsg.Message.Token = msg.To
-	fcmMsg.Message.Notification = &fcmNotification{
-		Title: msg.Title,
-		Body:  msg.Text,
+	if msg.Push == nil || !msg.Push.DataOnly {
+		fcmMsg.Message.Notification = &fcmNotification{
+			Title: msg.Title,
+			Body:  msg.Text,
+		}
 	}
 	fcmMsg.Message.Data = driver.DataPayload(msg.Data)
+	if msg.Push != nil {
+		if len(msg.Push.Data) > 0 {
+			if fcmMsg.Message.Data == nil {
+				fcmMsg.Message.Data = map[string]string{}
+			}
+			for k, v := range msg.Push.Data {
+				fcmMsg.Message.Data[k] = v
+			}
+		}
+		android := &fcmAndroid{Priority: "NORMAL", CollapseKey: msg.Push.CollapseID}
+		if u := msg.Push.EffectiveUrgency(); u == driver.UrgencyTimeSensitive || u == driver.UrgencyCritical {
+			android.Priority = "HIGH"
+		}
+		if msg.Push.TTL > 0 {
+			android.TTL = fmt.Sprintf("%ds", int64(msg.Push.TTL/time.Second))
+		}
+		fcmMsg.Message.Android = android
+	}
 
 	jsonBody, err := json.Marshal(fcmMsg)
 	if err != nil {
@@ -91,7 +178,10 @@ func (d *FCMDriver) Send(ctx context.Context, msg *driver.OutboundMessage) (*dri
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024)) //nolint:errcheck // best-effort error body read
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096)) //nolint:errcheck // best-effort error body read
+		if addressGone(respBody) {
+			return nil, fmt.Errorf("fcm: %w (%d)", driver.ErrAddressGone, resp.StatusCode)
+		}
 		return nil, fmt.Errorf("fcm: API error %d: %s", resp.StatusCode, string(respBody))
 	}
 
