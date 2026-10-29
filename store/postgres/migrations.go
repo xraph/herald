@@ -248,5 +248,39 @@ ALTER TABLE herald_scoped_configs DROP COLUMN IF EXISTS chat_provider_id;
 				return err
 			},
 		},
+		&migrate.Migration{
+			Name:    "create_herald_devices",
+			Version: "20261028000001",
+			Up: func(ctx context.Context, exec migrate.Executor) error {
+				_, err := exec.Exec(ctx, `
+CREATE TABLE IF NOT EXISTS herald_devices (
+    id           TEXT PRIMARY KEY,
+    app_id       TEXT NOT NULL,
+    user_id      TEXT NOT NULL,
+    channel      TEXT NOT NULL DEFAULT 'push',
+    provider     TEXT NOT NULL,
+    address      TEXT NOT NULL,
+    public_key   BYTEA,
+    unique_key   TEXT NOT NULL,
+    platform     TEXT NOT NULL DEFAULT '',
+    name         TEXT NOT NULL DEFAULT '',
+    locale       TEXT NOT NULL DEFAULT '',
+    time_zone    TEXT NOT NULL DEFAULT '',
+    quiet_start  TEXT NOT NULL DEFAULT '',
+    quiet_end    TEXT NOT NULL DEFAULT '',
+    settings     JSONB NOT NULL DEFAULT '{}',
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(app_id, user_id, unique_key)
+);
+`)
+				return err
+			},
+			Down: func(ctx context.Context, exec migrate.Executor) error {
+				_, err := exec.Exec(ctx, `DROP TABLE IF EXISTS herald_devices`)
+				return err
+			},
+		},
 	)
 }

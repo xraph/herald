@@ -13,6 +13,7 @@ import (
 	"github.com/xraph/grove/drivers/pgdriver"
 	"github.com/xraph/grove/migrate"
 
+	"github.com/xraph/herald/device"
 	"github.com/xraph/herald/id"
 	"github.com/xraph/herald/inbox"
 	"github.com/xraph/herald/message"
@@ -742,6 +743,101 @@ func (s *Store) ListScopedConfigs(ctx context.Context, appID string) ([]*scope.C
 		result[i] = c
 	}
 	return result, nil
+}
+
+// ==================== Device Store ====================
+
+var _ device.Store = (*Store)(nil)
+
+func (s *Store) SaveDevice(ctx context.Context, d *device.Device) error {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	m := toDeviceModel(d)
+	m.ID = id.NewDeviceID().String()
+	m.CreatedAt, m.UpdatedAt = now, now
+
+	var storedID string
+	var createdAt time.Time
+	err := s.pg.NewInsert(m).
+		OnConflict("(app_id, user_id, unique_key) DO UPDATE").
+		Set("channel = EXCLUDED.channel").
+		Set("provider = EXCLUDED.provider").
+		Set("address = EXCLUDED.address").
+		Set("public_key = EXCLUDED.public_key").
+		Set("platform = EXCLUDED.platform").
+		Set("name = EXCLUDED.name").
+		Set("locale = EXCLUDED.locale").
+		Set("time_zone = EXCLUDED.time_zone").
+		Set("quiet_start = EXCLUDED.quiet_start").
+		Set("quiet_end = EXCLUDED.quiet_end").
+		Set("settings = EXCLUDED.settings").
+		Set("last_seen_at = EXCLUDED.last_seen_at").
+		Set("updated_at = EXCLUDED.updated_at").
+		Returning("id", "created_at").
+		Scan(ctx, &storedID, &createdAt)
+	if err != nil {
+		return err
+	}
+
+	d.ID, d.CreatedAt, d.UpdatedAt = storedID, createdAt, now
+	return nil
+}
+
+func (s *Store) GetDevice(ctx context.Context, appID, deviceID string) (*device.Device, error) {
+	m := new(deviceModel)
+	err := s.pg.NewSelect(m).
+		Where("app_id = $1", appID).
+		Where("id = $2", deviceID).
+		Scan(ctx)
+	if err != nil {
+		if isNoRows(err) {
+			return nil, device.ErrNotFound
+		}
+		return nil, err
+	}
+	return fromDeviceModel(m), nil
+}
+
+func (s *Store) ListDevices(ctx context.Context, appID, userID string) ([]*device.Device, error) {
+	var models []deviceModel
+	err := s.pg.NewSelect(&models).
+		Where("app_id = $1", appID).
+		Where("user_id = $2", userID).
+		OrderExpr("created_at ASC, id ASC").
+		Scan(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*device.Device, len(models))
+	for i := range models {
+		result[i] = fromDeviceModel(&models[i])
+	}
+	return result, nil
+}
+
+func (s *Store) DeleteDevice(ctx context.Context, appID, deviceID string) error {
+	res, err := s.pg.NewDelete((*deviceModel)(nil)).
+		Where("app_id = $1", appID).
+		Where("id = $2", deviceID).
+		Exec(ctx)
+	if err != nil {
+		return err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return device.ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) DeleteUserDevices(ctx context.Context, appID, userID string) error {
+	_, err := s.pg.NewDelete((*deviceModel)(nil)).
+		Where("app_id = $1", appID).
+		Where("user_id = $2", userID).
+		Exec(ctx)
+	return err
 }
 
 // isNoRows checks for the standard sql.ErrNoRows sentinel.
