@@ -3,6 +3,7 @@ package pushgateway
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
@@ -104,7 +105,21 @@ func (g *gateway) serveSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Task 12: per-server-key and per-handle rate limits go here.
+	now := g.now()
+	handleSum := sha256.Sum256([]byte(body.Handle))
+	for _, b := range []struct {
+		set *limiterSet
+		key string
+	}{
+		{g.serverLimits, fp},
+		{g.handleLimits, hex.EncodeToString(handleSum[:])},
+	} {
+		if ok, retry := b.set.allow(b.key, now); !ok {
+			w.Header().Set("Retry-After", strconv.Itoa(retry))
+			fail(http.StatusTooManyRequests, "rate limited")
+			return
+		}
+	}
 
 	p := g.platform(c.P)
 	if p == nil {

@@ -65,6 +65,8 @@ type gateway struct {
 
 	serverPerSecond float64
 	handlePerMinute float64
+	serverLimits    *limiterSet
+	handleLimits    *limiterSet
 
 	log              *slog.Logger
 	now              func() time.Time
@@ -90,6 +92,8 @@ func New(cfg Config) (http.Handler, error) {
 		placeholderTitle: orString(cfg.PlaceholderTitle, defaultPlaceholderTitle),
 		placeholderBody:  orString(cfg.PlaceholderBody, defaultPlaceholderBody),
 	}
+	g.serverLimits = newLimiterSet(g.serverPerSecond, g.serverPerSecond)
+	g.handleLimits = newLimiterSet(g.handlePerMinute/60, g.handlePerMinute)
 	if g.log == nil {
 		g.log = slog.Default()
 	}
