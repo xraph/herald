@@ -25,8 +25,6 @@ type SendBody struct {
 // SignatureBase returns the bytes a request signature covers: the timestamp,
 // a dot, then the raw body.
 func SignatureBase(timestamp string, body []byte) []byte {
-	base := make([]byte, 0, len(timestamp)+1+len(body))
-	base = append(base, timestamp...)
-	base = append(base, '.')
+	base := append([]byte(timestamp), '.')
 	return append(base, body...)
 }
