@@ -51,6 +51,7 @@ func checkFields(t *testing.T, d describedDriver, extra map[string]string) {
 func TestBuiltInSchemas(t *testing.T) {
 	checkFields(t, &email.SMTPDriver{}, nil)
 	checkFields(t, &email.ResendDriver{}, nil)
+	checkFields(t, &email.FileDriver{}, nil)
 	checkFields(t, &sms.TwilioDriver{}, nil)
 	checkFields(t, &push.FCMDriver{}, map[string]string{"access_token": "x"})
 	checkFields(t, &inapp.Driver{}, nil)

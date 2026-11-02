@@ -127,12 +127,13 @@ You probably started with one email provider called straight from a handler. The
 
 ## Channels and drivers
 
-Each provider you store names a driver, and you register that driver on the engine with `herald.WithDriver`. Five come in the root module:
+Each provider you store names a driver, and you register that driver on the engine with `herald.WithDriver`. Six come in the root module:
 
 | Driver | Channel | Package | Credentials and settings |
 | --- | --- | --- | --- |
 | `smtp` | email | `github.com/xraph/herald/driver/email` (`&email.SMTPDriver{}`) | `username`, `password`; settings `host`, `port`, `use_tls` |
 | `resend` | email | `github.com/xraph/herald/driver/email` (`&email.ResendDriver{}`) | `api_key` |
+| `file` | email | `github.com/xraph/herald/driver/email` (`&email.FileDriver{}`) | setting `dir`; writes each email there as an `.eml` file, for local development |
 | `twilio` | sms | `github.com/xraph/herald/driver/sms` (`&sms.TwilioDriver{}`) | `account_sid`, `auth_token`; setting `from_number` |
 | `fcm` | push | `github.com/xraph/herald/driver/push` (`&push.FCMDriver{}`) | `access_token` or `server_key`; setting `project_id` |
 | `inapp` | inapp | `github.com/xraph/herald/driver/inapp` (`&inapp.Driver{}`) | none |
@@ -221,7 +222,7 @@ During `Register` the extension:
 
 1. Picks a store. A `*grove.DB` from `WithGroveDatabase(name)` or `grove_database` comes first, then the default `*grove.DB` in the container, then `WithStore`. A grove store wins over `WithStore` even when you never asked for grove, so in an app that also runs the Grove extension your `WithStore` store is ignored unless there's no default grove database.
 2. Uses a `chronicle.Emitter` from the container for audit events if there is one, and slog if not.
-3. Registers the five built-in drivers. Add others with `heraldext.WithDriver`.
+3. Registers the seven built-in drivers. Add others with `heraldext.WithDriver`.
 4. Runs migrations, seeds the in-app provider and any `providers` from your config, and mounts the REST API under `/herald`.
 5. Provides `*herald.Herald` to the container, so you can resolve it with `forge.Inject[*herald.Herald](app.Container())`.
 
