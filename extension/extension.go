@@ -151,6 +151,7 @@ func (e *Extension) Init(fapp forge.App) error {
 	heraldOpts = append(heraldOpts,
 		herald.WithDriver(&email.SMTPDriver{}),
 		herald.WithDriver(&email.ResendDriver{}),
+		herald.WithDriver(&email.FileDriver{}),
 		herald.WithDriver(&sms.TwilioDriver{}),
 		herald.WithDriver(&push.FCMDriver{}),
 		herald.WithDriver(&push.SealedDriver{}),

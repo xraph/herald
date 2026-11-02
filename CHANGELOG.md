@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### File driver
+
+- `email.FileDriver` (`file`) writes each email to the directory in its `dir` setting as an `.eml` file, instead of sending it. You get a local mailbox with no mail server: open the files in any mail client. A message with both a text and an HTML body becomes `multipart/alternative`. Files are named by time so they sort in order, and they're written then renamed, so a watcher never sees half a message.
+- The directory is created `0700` and each file `0600`, since a file holds the whole message, sign-in links included.
+- The Forge extension registers it. A provider that names `file` works with no setup.
+
 ## v1.9.0
 
 Herald can push to a user's devices now, and send a push the gateway in the middle can't read. Most of it is new API, so nothing you already run changes unless you read the first section and it applies to you.
