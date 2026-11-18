@@ -55,6 +55,8 @@ func TestCommandsOverTheWireCarryTheirInvalidates(t *testing.T) {
 		body := `{"envelope":"v1","kind":"command","contributor":"herald","intent":"` + c.intent +
 			`","intentVersion":1,"csrf":"test","idempotencyKey":"` + c.intent + `","payload":` + c.payload + `}`
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/dashboard/v1", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 
