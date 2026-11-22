@@ -45,14 +45,14 @@ func (f *fakeDriver) Validate(_, _ map[string]string) error { return f.err }
 
 func testPlatforms() (*Platform, *Platform) {
 	return &Platform{
-			Driver:      &fakeDriver{name: "fcm", channel: "push"},
-			Credentials: map[string]string{"service_account": "sa"},
-			Settings:    map[string]string{"project_id": "p1"},
-		}, &Platform{
-			Driver:      &fakeDriver{name: "apns", channel: "push"},
-			Credentials: map[string]string{"private_key": "pem"},
-			Settings:    map[string]string{"key_id": "K1", "team_id": "T1", "bundle_id": "com.example.app"},
-		}
+		Driver:      &fakeDriver{name: "fcm", channel: "push"},
+		Credentials: map[string]string{"service_account": "sa"},
+		Settings:    map[string]string{"project_id": "p1"},
+	}, &Platform{
+		Driver:      &fakeDriver{name: "apns", channel: "push"},
+		Credentials: map[string]string{"private_key": "pem"},
+		Settings:    map[string]string{"key_id": "K1", "team_id": "T1", "bundle_id": "com.example.app"},
+	}
 }
 
 func testConfig() Config {

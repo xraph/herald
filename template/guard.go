@@ -407,7 +407,7 @@ func sprintfBound(format string, args []any) int {
 			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 				n = v.Int()
 			case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-				return int(min(v.Uint(), fmtMaxNum)) //nolint:gosec // min caps it at fmtMaxNum
+				return int(min(v.Uint(), fmtMaxNum))
 			default:
 				return 0
 			}
