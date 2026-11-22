@@ -1,10 +1,12 @@
 package email_test
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"mime"
 	"mime/multipart"
+	"mime/quotedprintable"
 	"net/mail"
 	"os"
 	"path/filepath"
@@ -121,5 +123,57 @@ func TestFileDriverNeedsADirectory(t *testing.T) {
 	}
 	if _, err := d.Send(context.Background(), &driver.OutboundMessage{To: "a@example.com", Text: "x"}); err == nil {
 		t.Fatal("send passed without dir")
+	}
+}
+
+func TestFileDriverLinkInRawAndDecodedParts(t *testing.T) {
+	link := "http://localhost:3000/app/invite/" + strings.Repeat("ab", 32)
+	for _, tc := range []struct{ name, text, encoding string }{
+		{"ascii", "Accept the invitation: " + link, "7bit"},
+		{"utf8", "Invitación: " + link, "8bit"},
+		{"limit", strings.Repeat("a", 998) + "\r\n" + link, "7bit"},
+		{"long line", strings.Repeat("é", 500) + "\r\n" + link, "quoted-printable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			html := `<a href="` + link + `">Accept invitation</a>`
+			result, err := (&email.FileDriver{}).Send(t.Context(), &driver.OutboundMessage{
+				To: "invitee@example.test", From: "sender@example.test", Subject: "Invite",
+				Text: tc.text, HTML: html, Data: map[string]string{"dir": dir},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(filepath.Join(dir, result.ProviderMessageID))
+			if err != nil {
+				t.Fatal(err)
+			}
+			m, err := mail.ReadMessage(bytes.NewReader(data))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, params, err := mime.ParseMediaType(m.Header.Get("Content-Type"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			parts := multipart.NewReader(m.Body, params["boundary"])
+			for _, want := range []struct{ encoding, body string }{{tc.encoding, tc.text}, {"7bit", html}} {
+				part, err := parts.NextRawPart()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := part.Header.Get("Content-Transfer-Encoding"); got != want.encoding {
+					t.Fatalf("encoding = %s, want %s", got, want.encoding)
+				}
+				var reader io.Reader = part
+				if want.encoding == "quoted-printable" {
+					reader = quotedprintable.NewReader(part)
+				}
+				body, err := io.ReadAll(reader)
+				if err != nil || string(body) != want.body {
+					t.Fatalf("invitation body differs with %s encoding: %v", want.encoding, err)
+				}
+			}
+		})
 	}
 }

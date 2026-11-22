@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/xraph/herald/driver"
 	"github.com/xraph/herald/message"
@@ -107,9 +108,7 @@ func composeEML(msg *driver.OutboundMessage, now time.Time, id string) ([]byte, 
 			body, contentType = msg.HTML, "text/html"
 		}
 		header("Content-Type", contentType+"; charset=UTF-8")
-		header("Content-Transfer-Encoding", "quoted-printable")
-		b.WriteString("\r\n")
-		if err := writeQP(&b, body); err != nil {
+		if err := writeFileBody(&b, body); err != nil {
 			return nil, err
 		}
 		return []byte(b.String()), nil
@@ -121,9 +120,7 @@ func composeEML(msg *driver.OutboundMessage, now time.Time, id string) ([]byte, 
 	for _, part := range []struct{ contentType, body string }{{"text/plain", msg.Text}, {"text/html", msg.HTML}} {
 		b.WriteString("--" + boundary + "\r\n")
 		header("Content-Type", part.contentType+"; charset=UTF-8")
-		header("Content-Transfer-Encoding", "quoted-printable")
-		b.WriteString("\r\n")
-		if err := writeQP(&b, part.body); err != nil {
+		if err := writeFileBody(&b, part.body); err != nil {
 			return nil, err
 		}
 		b.WriteString("\r\n")
@@ -132,12 +129,44 @@ func composeEML(msg *driver.OutboundMessage, now time.Time, id string) ([]byte, 
 	return []byte(b.String()), nil
 }
 
-func writeQP(b *strings.Builder, body string) error {
+// File previews often recognize a URL in the raw text. Keep each MIME part
+// readable when it fits the 998-byte limit for an email line.
+func writeFileBody(b *strings.Builder, body string) error {
+	// Match the MIME writer's CRLF line endings for all three encodings.
+	body = strings.ReplaceAll(body, "\r\n", "\n")
+	encoding := fileBodyEncoding(body)
+	b.WriteString("Content-Transfer-Encoding: " + encoding + "\r\n\r\n")
+	if encoding != "quoted-printable" {
+		b.WriteString(strings.ReplaceAll(body, "\n", "\r\n"))
+		return nil
+	}
+
 	w := quotedprintable.NewWriter(b)
 	if _, err := w.Write([]byte(body)); err != nil {
 		return err
 	}
 	return w.Close()
+}
+
+func fileBodyEncoding(body string) string {
+	if !utf8.ValidString(body) {
+		return "quoted-printable"
+	}
+	encoding := "7bit"
+	for line := range strings.SplitSeq(body, "\n") {
+		if len(line) > 998 {
+			return "quoted-printable"
+		}
+		for _, r := range line {
+			switch {
+			case (r < ' ' && r != '\t') || r == 0x7f:
+				return "quoted-printable"
+			case r >= utf8.RuneSelf:
+				encoding = "8bit"
+			}
+		}
+	}
+	return encoding
 }
 
 // oneLine drops line breaks, so no value can start a header of its own.
