@@ -112,3 +112,53 @@ func TestPreviewSendRefusesAnUnregisteredDriverLikeSend(t *testing.T) {
 		t.Errorf("PreviewSend = %v, want the error Send returns: %v", err, sendErr)
 	}
 }
+
+// A sender may be written with its display name. Drivers get the address
+// alone in From and the name in FromName, or they send "Acme <Acme <...>>".
+func TestEmailSenderMayCarryItsName(t *testing.T) {
+	cases := []struct {
+		name               string
+		settings           map[string]string
+		wantFrom, wantName string
+	}{
+		{"a bare address", map[string]string{"from": "hello@example.com", "from_name": "Acme"}, "hello@example.com", "Acme"},
+		{"a named address", map[string]string{"from": "Acme <hello@example.com>"}, "hello@example.com", "Acme"},
+		{"the name in from wins over from_name", map[string]string{"from": "Acme Ops <ops@example.com>", "from_name": "Acme"}, "ops@example.com", "Acme Ops"},
+		{"a quoted name", map[string]string{"from": `"Acme, Inc" <hello@example.com>`}, "hello@example.com", "Acme, Inc"},
+		{"an address in angle brackets keeps from_name", map[string]string{"from": "<hello@example.com>", "from_name": "Acme"}, "hello@example.com", "Acme"},
+		{"a sender that does not parse is left alone", map[string]string{"from": "Acme <not an address", "from_name": "Acme"}, "Acme <not an address", "Acme"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st := memory.New()
+			h := newHerald(t, st, WithDriver(&recordingDriver{name: "rec", channel: "email"}))
+			p := &provider.Provider{
+				ID: id.NewProviderID(), AppID: "app_a", Name: "mail", Channel: "email", Driver: "rec",
+				Settings: tc.settings, Enabled: true,
+			}
+			if err := st.CreateProvider(bg, p); err != nil {
+				t.Fatal(err)
+			}
+			got, err := h.PreviewSend(bg, &SendRequest{AppID: "app_a", Channel: "email"})
+			if err != nil || got.From != tc.wantFrom || got.FromName != tc.wantName {
+				t.Fatalf("from = %q, name = %q, %v; want %q, %q", got.From, got.FromName, err, tc.wantFrom, tc.wantName)
+			}
+		})
+	}
+
+	t.Run("a scoped config's from email too", func(t *testing.T) {
+		st := memory.New()
+		h := newHerald(t, st, WithDriver(&recordingDriver{name: "rec", channel: "email"}))
+		p := seedProvider(t, h, "app_a", "mail", "rec", 0, true)
+		if err := st.SetScopedConfig(bg, &scope.Config{
+			ID: id.NewScopedConfigID(), AppID: "app_a", Scope: scope.ScopeApp, ScopeID: "app_a",
+			EmailProviderID: p.ID.String(), FromEmail: "Routed <routed@example.com>",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		got, err := h.PreviewSend(bg, &SendRequest{AppID: "app_a", Channel: "email"})
+		if err != nil || got.From != "routed@example.com" || got.FromName != "Routed" {
+			t.Fatalf("from = %q, name = %q, %v", got.From, got.FromName, err)
+		}
+	})
+}
