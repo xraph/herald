@@ -10,7 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/mail"
 	"slices"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -483,6 +485,32 @@ func applyFrom(out *driver.OutboundMessage, res *scope.ResolveResult, channel st
 	}
 	if out.FromName == "" {
 		out.FromName = prov.Settings["from_name"]
+	}
+	if channel == string(ChannelEmail) {
+		splitEmailSender(out)
+	}
+}
+
+// splitEmailSender lets an email sender be written either as a bare address
+// ("hello@example.com") or with its display name ("Acme <hello@example.com>"),
+// in a provider's from setting or a scoped config's from email. Drivers
+// expect From to hold the address alone: they join it with FromName as
+// "name <from>" and SMTP also hands it to MAIL FROM, so a name left inside
+// From went out as "Acme <Acme <hello@example.com>>" and providers refused
+// the message. The name written inside From wins over a separate
+// from_name, being the more specific of the two. A From that does not parse
+// is left as it is, for the driver to report.
+func splitEmailSender(out *driver.OutboundMessage) {
+	if !strings.ContainsAny(out.From, "<\"") {
+		return
+	}
+	addr, err := mail.ParseAddress(out.From)
+	if err != nil {
+		return
+	}
+	out.From = addr.Address
+	if addr.Name != "" {
+		out.FromName = addr.Name
 	}
 }
 
